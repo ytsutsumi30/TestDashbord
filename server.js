@@ -272,6 +272,7 @@ app.get("/api/jobs/:jobId", (req, res) => {
       generatedAt: j.minutes.generatedAt,
       docxSize:    j.minutes.docxSize,
       docxFilename:j.minutes.docxFilename,
+      onedrive:    j.minutes.onedrive,
       downloadUrl: `/api/minutes/${j.jobId}/download`,
       markdownUrl: `/api/minutes/${j.jobId}/markdown`
     } : null

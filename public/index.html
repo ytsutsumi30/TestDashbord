@@ -108,6 +108,25 @@
       <canvas id="trendChart" height="180"></canvas>
     </section>
 
+    <!-- Meeting minutes jobs -->
+    <section class="panel minutes-panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">📝 議事録ジョブ</div>
+          <div class="panel-meta">録音・Teams transcript から生成された議事録</div>
+        </div>
+        <button class="mini-button" onclick="pollJobs()">更新</button>
+      </div>
+      <div class="minutes-layout">
+        <div class="jobs-list" id="jobsList">
+          <div class="empty-state">ジョブ取得中...</div>
+        </div>
+        <div class="job-detail" id="jobDetail">
+          <div class="empty-state">ジョブを選択してください</div>
+        </div>
+      </div>
+    </section>
+
     <!-- Test mode area -->
     <section class="panel test-panel">
       <div class="panel-head">

@@ -12,6 +12,8 @@ const ROOM_COLOR = {
 };
 
 let lastEntryCount = 0;
+let selectedJobId = null;
+let lastJobsSignature = "";
 
 async function poll() {
   try {
@@ -21,6 +23,19 @@ async function poll() {
     render(data);
   } catch (e) {
     console.warn("poll failed", e);
+  }
+}
+
+async function pollJobs() {
+  try {
+    const res = await fetch("/api/jobs", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    renderJobs(data.jobs || []);
+  } catch (e) {
+    console.warn("jobs poll failed", e);
+    const list = document.getElementById("jobsList");
+    if (list) list.innerHTML = '<div class="empty-state">ジョブ取得に失敗しました</div>';
   }
 }
 
@@ -191,6 +206,143 @@ function drawLog(data) {
   }).join("") || '<div class="entry"><span class="t">受信待ち...</span></div>';
 }
 
+function renderJobs(jobs) {
+  const list = document.getElementById("jobsList");
+  if (!list) return;
+
+  const signature = jobs.map(j => `${j.jobId}:${j.status}:${j.speakerCount || ""}:${j.error || ""}`).join("|");
+  if (signature === lastJobsSignature) return;
+  lastJobsSignature = signature;
+
+  if (!jobs.length) {
+    selectedJobId = null;
+    list.innerHTML = '<div class="empty-state">議事録ジョブはまだありません</div>';
+    document.getElementById("jobDetail").innerHTML = '<div class="empty-state">録音アップロード後にここへ表示されます</div>';
+    return;
+  }
+
+  if (!selectedJobId || !jobs.some(j => j.jobId === selectedJobId)) {
+    selectedJobId = jobs[0].jobId;
+    loadJobDetail(selectedJobId);
+  }
+
+  list.innerHTML = jobs.map(j => {
+    const selected = j.jobId === selectedJobId ? "selected" : "";
+    const created = formatDateTime(j.createdAt);
+    return `
+      <button class="job-row ${selected}" onclick="selectJob('${escapeAttr(j.jobId)}')">
+        <div class="job-row-top">
+          <span class="job-title">${escapeHtml(j.title || j.jobId)}</span>
+          <span class="status-badge ${statusClass(j.status)}">${escapeHtml(j.status)}</span>
+        </div>
+        <div class="job-row-meta">
+          ${escapeHtml(created)} / ${escapeHtml(j.roomId || "room未設定")} / speakers=${escapeHtml(j.speakerCount ?? "—")}
+        </div>
+        ${j.error ? `<div class="job-error">${escapeHtml(j.error)}</div>` : ""}
+      </button>`;
+  }).join("");
+
+  if (selectedJobId) loadJobDetail(selectedJobId);
+}
+
+function selectJob(jobId) {
+  selectedJobId = jobId;
+  lastJobsSignature = "";
+  pollJobs();
+  loadJobDetail(jobId);
+}
+
+async function loadJobDetail(jobId) {
+  const detail = document.getElementById("jobDetail");
+  detail.innerHTML = '<div class="empty-state">読み込み中...</div>';
+  try {
+    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const job = await res.json();
+    detail.innerHTML = jobDetailHtml(job);
+  } catch (e) {
+    detail.innerHTML = `<div class="empty-state">詳細取得に失敗しました: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function jobDetailHtml(job) {
+  const minutes = job.minutes;
+  const onedrive = minutes?.onedrive;
+  const download = minutes?.downloadUrl
+    ? `<a class="action-link" href="${escapeAttr(minutes.downloadUrl)}">DOCX ダウンロード</a>`
+    : '<span class="muted-text">DOCX未生成</span>';
+  const markdown = minutes?.markdownUrl
+    ? `<button class="action-link button-link" onclick="loadMarkdownPreview('${escapeAttr(job.jobId)}')">Markdownプレビュー</button>`
+    : "";
+  const share = onedrive?.shareUrl
+    ? `<a class="action-link" href="${escapeAttr(onedrive.shareUrl)}" target="_blank" rel="noopener">OneDrive共有リンク</a>`
+    : onedrive?.webUrl
+      ? `<a class="action-link" href="${escapeAttr(onedrive.webUrl)}" target="_blank" rel="noopener">OneDriveを開く</a>`
+      : "";
+
+  return `
+    <div class="detail-head">
+      <div>
+        <div class="detail-title">${escapeHtml(job.meta?.title || job.jobId)}</div>
+        <div class="detail-sub">${escapeHtml(job.jobId)} / ${escapeHtml(job.meta?.room_id || "room未設定")}</div>
+      </div>
+      <span class="status-badge ${statusClass(job.status)}">${escapeHtml(job.status)}</span>
+    </div>
+    <div class="detail-grid">
+      <div><span>作成</span><b>${escapeHtml(formatDateTime(job.createdAt))}</b></div>
+      <div><span>完了</span><b>${escapeHtml(formatDateTime(job.completedAt))}</b></div>
+      <div><span>話者</span><b>${escapeHtml(job.transcript?.speakerCount ?? "—")}</b></div>
+      <div><span>Mock</span><b>${job.mocked || minutes?.mocked ? "yes" : "no"}</b></div>
+      <div><span>Model</span><b>${escapeHtml(minutes?.model || "—")}</b></div>
+      <div><span>DOCX</span><b>${escapeHtml(formatBytes(minutes?.docxSize))}</b></div>
+    </div>
+    ${job.error ? `<div class="detail-error">${escapeHtml(job.error)}</div>` : ""}
+    <div class="detail-actions">${download}${markdown}${share}</div>
+    <pre class="markdown-preview" id="markdownPreview">Markdownプレビューは未表示です。</pre>`;
+}
+
+async function loadMarkdownPreview(jobId) {
+  const preview = document.getElementById("markdownPreview");
+  preview.textContent = "Markdown読み込み中...";
+  try {
+    const res = await fetch(`/api/minutes/${encodeURIComponent(jobId)}/markdown`, { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    preview.textContent = await res.text();
+  } catch (e) {
+    preview.textContent = `Markdown取得に失敗しました: ${e.message}`;
+  }
+}
+
+function statusClass(status) {
+  return `status-${String(status || "unknown").replace(/[^a-z0-9_-]/gi, "_").toLowerCase()}`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function formatBytes(value) {
+  if (!value) return "—";
+  if (value < 1024) return `${value} B`;
+  return `${Math.round(value / 1024)} KB`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/`/g, "&#96;");
+}
+
 async function resetState() {
   if (!confirm("すべての会議室の人数をリセットしますか？")) return;
   await fetch("/api/state", { method: "DELETE" });
@@ -199,4 +351,6 @@ async function resetState() {
 
 // initial + interval
 poll();
+pollJobs();
 setInterval(poll, POLL_INTERVAL_MS);
+setInterval(pollJobs, POLL_INTERVAL_MS);
