@@ -239,8 +239,8 @@ function parseVttToSegments(vttText) {
     const endSec   = _vttTimeToSec(match[2]);
     const rawText  = match[3].trim();
 
-    // <v SpeakerName>text</v> 形式をパース
-    const vTagMatch = rawText.match(/^<v\s+([^>]+)>([\s\S]*?)<\/v>$/s);
+    // <v SpeakerName>text</v> または <v SpeakerName>text 形式をパース（</v>省略可）
+    const vTagMatch = rawText.match(/^<v\s+([^>]+)>([\s\S]*?)(?:<\/v>)?$/s);
     if (vTagMatch) {
       segments.push({
         start:       startSec,

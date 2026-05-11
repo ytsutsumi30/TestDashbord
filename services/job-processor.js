@@ -12,16 +12,56 @@ const claude         = require("./claude");
 const docxBuilder    = require("./docx-builder");
 const graph          = require("./graph");
 
-// 永続化先: storage/transcripts/<jobId>.json + storage/minutes/<jobId>.docx
+// 永続化先: storage/transcripts/<jobId>.json + storage/minutes/<jobId>.docx + storage/jobs/<jobId>.json
 const TRANSCRIPTS_DIR = path.join(__dirname, "..", "storage", "transcripts");
 const MINUTES_MD_DIR  = path.join(__dirname, "..", "storage", "minutes-md");
+const JOBS_DIR        = path.join(__dirname, "..", "storage", "jobs");
 if (!fs.existsSync(TRANSCRIPTS_DIR)) fs.mkdirSync(TRANSCRIPTS_DIR, { recursive: true });
 if (!fs.existsSync(MINUTES_MD_DIR))  fs.mkdirSync(MINUTES_MD_DIR,  { recursive: true });
+if (!fs.existsSync(JOBS_DIR))        fs.mkdirSync(JOBS_DIR,         { recursive: true });
 
 // メモリ内ジョブストア (本番は Azure Table 推奨)
 //   key = jobId
 //   value = { jobId, status, audioFile, ...meta, transcript? }
 const jobStore = new Map();
+
+// ─── ジョブ永続化ヘルパー ─────────────────────────────────────────
+/** ジョブ状態を storage/jobs/<jobId>.json に保存する (失敗してもログのみ) */
+function persistJob(job) {
+  try {
+    const p = path.join(JOBS_DIR, `${job.jobId}.json`);
+    // audioFile の絶対パスはファイル名だけに変換して保存
+    const snapshot = Object.assign({}, job, {
+      audioFile: job.audioFile ? path.basename(job.audioFile) : null
+    });
+    fs.writeFileSync(p, JSON.stringify(snapshot, null, 2), "utf8");
+  } catch (e) {
+    console.warn(`[job ${job.jobId}] persist failed: ${e.message}`);
+  }
+}
+
+/** 起動時に storage/jobs/*.json から既存ジョブを復元する */
+function loadPersistedJobs() {
+  try {
+    const files = fs.readdirSync(JOBS_DIR).filter(f => f.endsWith(".json"));
+    let loaded = 0;
+    for (const f of files) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), "utf8"));
+        if (raw.jobId && !jobStore.has(raw.jobId)) {
+          jobStore.set(raw.jobId, raw);
+          loaded++;
+        }
+      } catch (_) { /* 壊れたファイルはスキップ */ }
+    }
+    if (loaded > 0) console.log(`[job-processor] loaded ${loaded} persisted jobs from storage/jobs/`);
+  } catch (e) {
+    console.warn(`[job-processor] loadPersistedJobs failed: ${e.message}`);
+  }
+}
+
+// 起動時に復元
+loadPersistedJobs();
 
 const STATUS = Object.freeze({
   QUEUED:        "queued",
@@ -64,6 +104,7 @@ async function startJob(args) {
     transcript: null
   };
   jobStore.set(jobId, job);
+  persistJob(job);
 
   // 非同期に処理開始 (待たない)
   process.nextTick(() => processJob(jobId).catch(err => {
@@ -88,6 +129,7 @@ async function processJob(jobId) {
 
     // 2. Azure Speech へ送信
     job.status = STATUS.TRANSCRIBING;
+    persistJob(job);
     const result = await azureSpeech.transcribeAudio({
       audioUrl:    published.url,
       displayName: `meeting-${jobId}`,
@@ -122,6 +164,7 @@ async function processJob(jobId) {
 
     // 3. Claude で議事録 Markdown 生成
     job.status = STATUS.SUMMARIZING;
+    persistJob(job);
     const summarized = await claude.generateMinutes({
       meta: job.meta,
       segments: result.segments
@@ -141,6 +184,7 @@ async function processJob(jobId) {
 
     // 4. .docx 生成
     job.status = STATUS.BUILDING_DOCX;
+    persistJob(job);
     const docxResult = await docxBuilder.buildDocx({
       jobId,
       meta: job.meta,
@@ -158,6 +202,7 @@ async function processJob(jobId) {
 
     // 5. OneDrive 自動アップロード (任意・失敗してもJob全体は失敗にしない)
     job.status = STATUS.UPLOADING;
+    persistJob(job);
     try {
       // ファイル名に会議室・タイトルを含める (例: medium_週次定例MTG_w3-mock-001.docx)
       const safeTitle = (job.meta?.title || "untitled").substring(0, 40).replace(/[\\\/:*?"<>|#%]/g, "_");
@@ -185,9 +230,11 @@ async function processJob(jobId) {
 
     job.status = STATUS.COMPLETED;
     job.completedAt = new Date().toISOString();
+    persistJob(job);
   } catch (err) {
     job.status = STATUS.FAILED;
     job.error = err.message;
+    persistJob(job);
     console.error(`[job ${jobId}] FAILED: ${err.message}`);
   }
 }
@@ -217,6 +264,7 @@ async function startJobFromTeams(args) {
     transcript: null
   };
   jobStore.set(jobId, job);
+  persistJob(job);
 
   process.nextTick(() => processJobFromTeams(jobId, segments, mocked).catch(err => {
     console.error(`[job ${jobId}] uncaught error (Teams)`, err);
@@ -232,6 +280,7 @@ async function processJobFromTeams(jobId, segments, mocked) {
   try {
     // 1. transcript を保存 (Azure Speech スキップ)
     job.status = STATUS.TRANSCRIBING;
+    persistJob(job);
     job.transcript = {
       speakerCount: new Set(segments.map(s => s.speakerLabel)).size,
       wordCount:    segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0),
@@ -256,6 +305,7 @@ async function processJobFromTeams(jobId, segments, mocked) {
 
     // 2. Claude で議事録 Markdown 生成
     job.status = STATUS.SUMMARIZING;
+    persistJob(job);
     const summarized = await claude.generateMinutes({ meta: job.meta, segments });
     job.minutes = {
       markdown:    summarized.markdown,
@@ -270,8 +320,9 @@ async function processJobFromTeams(jobId, segments, mocked) {
     job.minutes.mdPath = mdPath;
     console.log(`[job ${jobId}] minutes generated chars=${summarized.markdown.length} mocked=${summarized.mocked}`);
 
-    // 3. .docx 生成
+    // 3. .docx 生成 (Teams)
     job.status = STATUS.BUILDING_DOCX;
+    persistJob(job);
     const docxResult = await docxBuilder.buildDocx({
       jobId,
       meta: job.meta,
@@ -287,8 +338,9 @@ async function processJobFromTeams(jobId, segments, mocked) {
     job.minutes.docxFilename = docxResult.filename;
     console.log(`[job ${jobId}] docx built ${docxResult.path} size=${docxResult.size}B`);
 
-    // 4. OneDrive 自動アップロード
+    // 4. OneDrive 自動アップロード (Teams)
     job.status = STATUS.UPLOADING;
+    persistJob(job);
     try {
       const safeTitle    = (job.meta?.title || "untitled").substring(0, 40).replace(/[\\\/:*?"<>|#%]/g, "_");
       const friendlyName = `${job.meta?.room_id || "unknown"}_${safeTitle}_${jobId}.docx`;
@@ -313,9 +365,11 @@ async function processJobFromTeams(jobId, segments, mocked) {
 
     job.status = STATUS.COMPLETED;
     job.completedAt = new Date().toISOString();
+    persistJob(job);
   } catch (err) {
     job.status = STATUS.FAILED;
     job.error = err.message;
+    persistJob(job);
     console.error(`[job ${jobId}] FAILED (Teams): ${err.message}`);
   }
 }
