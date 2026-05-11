@@ -4,3 +4,24 @@ npm-debug.log*
 .DS_Store
 .idea/
 
+# 録音ファイル（機密・大容量）
+recordings/
+
+# 環境変数（APIキー等を含む）
+.env
+
+# 生成ファイル（文字起こし・議事録・音声公開）はコミット対象外
+# ディレクトリ構造は .gitkeep で保持する
+storage/audio-public/*
+!storage/audio-public/.gitkeep
+storage/transcripts/*
+!storage/transcripts/.gitkeep
+storage/minutes/*
+!storage/minutes/.gitkeep
+storage/minutes-md/*
+!storage/minutes-md/.gitkeep
+
+# 録音ファイル本体は除外、ディレクトリは保持
+recordings/*
+!recordings/.gitkeep
+

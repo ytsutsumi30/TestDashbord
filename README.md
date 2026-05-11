@@ -368,6 +368,7 @@ Cloudflareなしでも、同じWi-Fi内なら直接接続できます:
 | メソッド | パス | 用途 |
 |---|---|---|
 | POST | `/ingest/headcount` | Android アプリからのカウント受信 |
+| POST | `/ingest/recording` | Android アプリからの録音ファイル受信 (`multipart/form-data`: `meta`, `audio`) |
 | GET  | `/api/state` | 現在状態（JSON）。3秒ごとにダッシュボードがポーリング |
 | POST | `/api/devices` | `device_id` ↔ 会議室 マッピング登録（body: `{"device_id":"...","room_id":"medium"}`） |
 | DELETE | `/api/state` | 全会議室の状態リセット |
@@ -419,6 +420,26 @@ Cloudflareなしでも、同じWi-Fi内なら直接接続できます:
 | ターミナル②を閉じた | 再度 `cloudflared tunnel --url http://localhost:3000` を実行 |
 | ターミナル①が落ちた | 再度 `npm start` を実行 |
 | CORS エラー | 本サーバーは CORS 対応済み (`Access-Control-Allow-Origin: *`)。それでも出る場合は DevTools のNetworkタブで詳細を確認 |
+
+### 「終了して送信」で `送信失敗: HTTP 404` が出る
+
+録音アップロード先URLが誤っているか、古いサーバープロセスで `/ingest/recording` が未反映の可能性があります。
+
+- 設定画面の **議事録エンドポイントURL** を `https://<TunnelURL>/ingest/recording` に設定（`/ingest/headcount` や `/` は不可）
+- サーバーを再起動して反映:
+
+```powershell
+cd C:\PRJ2\dev2\TestDashboard
+npm start
+```
+
+- 疎通確認:
+
+```powershell
+curl.exe -X POST http://127.0.0.1:3000/ingest/recording
+```
+
+`{"ok":false,"error":"audio file missing"}` が返ればルートは存在しています（404 ではない）。
 
 ### 「未登録のdevice_id」と表示される
 

@@ -1,0 +1,201 @@
+// ============================================================
+// Job Processor (オーケストレーター)
+// ============================================================
+// 録音アップロード → Azure Speech → transcript 保存 までを束ねる。
+// ============================================================
+
+const fs = require("fs");
+const path = require("path");
+const audioPublisher = require("./audio-publisher");
+const azureSpeech    = require("./azure-speech");
+const claude         = require("./claude");
+const docxBuilder    = require("./docx-builder");
+const graph          = require("./graph");
+
+// 永続化先: storage/transcripts/<jobId>.json + storage/minutes/<jobId>.docx
+const TRANSCRIPTS_DIR = path.join(__dirname, "..", "storage", "transcripts");
+const MINUTES_MD_DIR  = path.join(__dirname, "..", "storage", "minutes-md");
+if (!fs.existsSync(TRANSCRIPTS_DIR)) fs.mkdirSync(TRANSCRIPTS_DIR, { recursive: true });
+if (!fs.existsSync(MINUTES_MD_DIR))  fs.mkdirSync(MINUTES_MD_DIR,  { recursive: true });
+
+// メモリ内ジョブストア (本番は Azure Table 推奨)
+//   key = jobId
+//   value = { jobId, status, audioFile, ...meta, transcript? }
+const jobStore = new Map();
+
+const STATUS = Object.freeze({
+  QUEUED:        "queued",
+  PUBLISHING:    "publishing",
+  TRANSCRIBING:  "transcribing",
+  SUMMARIZING:   "summarizing",
+  BUILDING_DOCX: "building_docx",
+  UPLOADING:     "uploading_onedrive",
+  COMPLETED:     "completed",
+  FAILED:        "failed"
+});
+
+function getJob(jobId) { return jobStore.get(jobId); }
+function listJobs() {
+  return Array.from(jobStore.values()).sort((a, b) =>
+    (b.createdAt || "").localeCompare(a.createdAt || "")
+  );
+}
+
+/**
+ * 録音ファイルを受信した直後に呼ぶ。
+ * 非同期で Azure Speech 処理を開始し、jobId を返す。
+ *
+ * @param {object} args
+ * @param {string} args.jobId
+ * @param {string} args.audioFile (絶対パス)
+ * @param {object} args.meta  - { device_id, room_id, title, started_at, ended_at, language }
+ * @returns {Promise<object>} job state
+ */
+async function startJob(args) {
+  const { jobId, audioFile, meta } = args;
+  const job = {
+    jobId,
+    status: STATUS.QUEUED,
+    createdAt: new Date().toISOString(),
+    audioFile,
+    meta,
+    azureSpeech: { mocked: azureSpeech.isMock() },
+    error: null,
+    transcript: null
+  };
+  jobStore.set(jobId, job);
+
+  // 非同期に処理開始 (待たない)
+  process.nextTick(() => processJob(jobId).catch(err => {
+    console.error(`[job ${jobId}] uncaught error`, err);
+  }));
+
+  return job;
+}
+
+async function processJob(jobId) {
+  const job = jobStore.get(jobId);
+  if (!job) return;
+
+  try {
+    // 1. 音声を公開
+    job.status = STATUS.PUBLISHING;
+    const published = await audioPublisher.publish(job.audioFile);
+    job.publishedUrl = published.url;
+    job.publishToken = published.token;
+    job.publishExpiresAt = published.expiresAt;
+    console.log(`[job ${jobId}] publishing OK url=${published.url}`);
+
+    // 2. Azure Speech へ送信
+    job.status = STATUS.TRANSCRIBING;
+    const result = await azureSpeech.transcribeAudio({
+      audioUrl:    published.url,
+      displayName: `meeting-${jobId}`,
+      locale:      job.meta?.language || "ja-JP"
+    });
+
+    job.transcript = {
+      jobUrl:       result.jobUrl,
+      speakerCount: result.speakerCount,
+      wordCount:    result.wordCount,
+      segments:     result.segments,
+      completedAt:  new Date().toISOString()
+    };
+
+    // transcript ファイルを永続化
+    const outPath = path.join(TRANSCRIPTS_DIR, `${jobId}.json`);
+    fs.writeFileSync(outPath, JSON.stringify({
+      job: {
+        jobId,
+        meta: job.meta,
+        audioFile: path.basename(job.audioFile),
+        createdAt: job.createdAt,
+        completedAt: job.transcript.completedAt
+      },
+      transcript: job.transcript
+    }, null, 2), "utf8");
+    job.transcriptPath = outPath;
+
+    // 公開 token を即時失効 (ローカルモードの安全策)
+    if (job.publishToken) audioPublisher.revoke(job.publishToken);
+    console.log(`[job ${jobId}] transcribe completed segments=${result.segments.length} speakers=${result.speakerCount}`);
+
+    // 3. Claude で議事録 Markdown 生成
+    job.status = STATUS.SUMMARIZING;
+    const summarized = await claude.generateMinutes({
+      meta: job.meta,
+      segments: result.segments
+    });
+    job.minutes = {
+      markdown:  summarized.markdown,
+      tokensIn:  summarized.tokensIn,
+      tokensOut: summarized.tokensOut,
+      model:     summarized.model,
+      mocked:    summarized.mocked,
+      generatedAt: new Date().toISOString()
+    };
+    const mdPath = path.join(MINUTES_MD_DIR, `${jobId}.md`);
+    fs.writeFileSync(mdPath, summarized.markdown, "utf8");
+    job.minutes.mdPath = mdPath;
+    console.log(`[job ${jobId}] minutes generated chars=${summarized.markdown.length} mocked=${summarized.mocked}`);
+
+    // 4. .docx 生成
+    job.status = STATUS.BUILDING_DOCX;
+    const docxResult = await docxBuilder.buildDocx({
+      jobId,
+      meta: job.meta,
+      summary: {
+        speakerCount: result.speakerCount,
+        wordCount: result.wordCount,
+        segmentCount: result.segments.length
+      },
+      markdown: summarized.markdown
+    });
+    job.minutes.docxPath = docxResult.path;
+    job.minutes.docxSize = docxResult.size;
+    job.minutes.docxFilename = docxResult.filename;
+    console.log(`[job ${jobId}] docx built ${docxResult.path} size=${docxResult.size}B`);
+
+    // 5. OneDrive 自動アップロード (任意・失敗してもJob全体は失敗にしない)
+    job.status = STATUS.UPLOADING;
+    try {
+      // ファイル名に会議室・タイトルを含める (例: medium_週次定例MTG_w3-mock-001.docx)
+      const safeTitle = (job.meta?.title || "untitled").substring(0, 40).replace(/[\\\/:*?"<>|#%]/g, "_");
+      const friendlyName = `${job.meta?.room_id || "unknown"}_${safeTitle}_${jobId}.docx`;
+      const subFolder = job.meta?.room_id || "";
+
+      const ud = await graph.uploadDocxAndShare({
+        filePath: docxResult.path,
+        filename: friendlyName,
+        subFolder
+      });
+      job.minutes.onedrive = {
+        driveItemId: ud.driveItemId,
+        webUrl:      ud.webUrl,
+        shareUrl:    ud.shareUrl,
+        name:        ud.name,
+        mocked:      ud.mocked,
+        uploadedAt:  new Date().toISOString()
+      };
+      console.log(`[job ${jobId}] onedrive uploaded mocked=${ud.mocked} url=${ud.webUrl}`);
+    } catch (err) {
+      console.warn(`[job ${jobId}] OneDrive upload failed (継続): ${err.message}`);
+      job.minutes.onedrive = { error: err.message };
+    }
+
+    job.status = STATUS.COMPLETED;
+    job.completedAt = new Date().toISOString();
+  } catch (err) {
+    job.status = STATUS.FAILED;
+    job.error = err.message;
+    console.error(`[job ${jobId}] FAILED: ${err.message}`);
+  }
+}
+
+module.exports = {
+  STATUS,
+  startJob,
+  processJob,
+  getJob,
+  listJobs
+};

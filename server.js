@@ -10,6 +10,10 @@
 const express = require("express");
 const path = require("path");
 
+// W2: Azure Speech 連携サービス
+const jobProcessor   = require("./services/job-processor");
+const audioPublisher = require("./services/audio-publisher");
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -26,6 +30,24 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
+
+// ─── multer (multipart受信) ─────────────────────────────────────
+const multer = require("multer");
+const fs = require("fs");
+const recordingsDir = path.join(__dirname, "recordings");
+if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, recordingsDir),
+  filename:    (_req, file, cb) => {
+    const ts = Date.now();
+    cb(null, `${ts}-${file.originalname}`);
+  }
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 200 * 1024 * 1024 } // 200MB
+});
 
 // ─── 会議室マスタ（IDを変えるとレイアウトに反映される） ────────────────
 const ROOMS = [
@@ -118,22 +140,178 @@ app.delete("/api/state", (_req, res) => {
   res.json({ ok: true });
 });
 
-// ─── ヘルスチェック ────────────────────────────────────────────────
+// ─── POST /ingest/recording ─ Android からの会議音声受信 ────────────
+//   multipart/form-data:
+//     - meta : application/json
+//     - audio: audio/mp4 (m4a)
+const recordings = []; // メモリに保持 (本番は DB)
+app.post("/ingest/recording", upload.single("audio"), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: "audio file missing" });
+    }
+    let meta = {};
+    try {
+      // meta は JSON 文字列で来る (multipart の text part)
+      meta = req.body.meta ? JSON.parse(req.body.meta) : {};
+    } catch (e) {
+      return res.status(400).json({ ok: false, error: "meta is not valid JSON" });
+    }
+
+    const jobId = meta.job_id || `srv-${Date.now()}`;
+    const record = {
+      job_id:     jobId,
+      device_id:  meta.device_id,
+      room_id:    meta.room_id,
+      title:      meta.title,
+      started_at: meta.started_at,
+      ended_at:   meta.ended_at,
+      language:   meta.language || "ja-JP",
+      file: {
+        path: req.file.path,
+        size: req.file.size,
+        mimetype: req.file.mimetype,
+        originalName: req.file.originalname
+      },
+      receivedAt: new Date().toISOString(),
+      status: "received"
+    };
+    recordings.unshift(record);
+    if (recordings.length > 100) recordings.length = 100;
+
+    console.log(
+      `[recording] received jobId=${jobId} device=${meta.device_id} room=${meta.room_id} ` +
+      `size=${(req.file.size / 1024).toFixed(1)}KB title="${meta.title}"`
+    );
+
+    // W2: 非同期で Azure Speech 処理を開始 (mock or real)
+    jobProcessor.startJob({
+      jobId,
+      audioFile: req.file.path,
+      meta: {
+        device_id:  meta.device_id,
+        room_id:    meta.room_id,
+        title:      meta.title,
+        started_at: meta.started_at,
+        ended_at:   meta.ended_at,
+        language:   meta.language || "ja-JP"
+      }
+    }).catch(err => console.error("[recording] startJob error", err));
+
+    return res.status(202).json({
+      ok: true,
+      job_id: jobId,
+      status: "received",
+      message: "transcription started"
+    });
+  } catch (err) {
+    console.error("[recording] error", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /api/recordings - 受信済み録音一覧
+app.get("/api/recordings", (_req, res) => {
+  res.json({
+    ok: true,
+    count: recordings.length,
+    recordings: recordings.map(r => ({
+      job_id: r.job_id,
+      device_id: r.device_id,
+      room_id: r.room_id,
+      title: r.title,
+      started_at: r.started_at,
+      ended_at: r.ended_at,
+      sizeKB: Math.round(r.file.size / 1024),
+      receivedAt: r.receivedAt,
+      status: r.status
+    }))
+  });
+});
+// ─── W2: 音声ファイル公開エンドポイント ────────────────────────────
+app.get("/public-audio/:token/:filename", audioPublisher.localAudioMiddleware);
+
+// ─── W2: ジョブ状態取得 ─────────────────────────────────────────
+app.get("/api/jobs", (_req, res) => {
+  const jobs = jobProcessor.listJobs().map(j => ({
+    jobId:        j.jobId,
+    status:       j.status,
+    createdAt:    j.createdAt,
+    title:        j.meta?.title,
+    deviceId:     j.meta?.device_id,
+    roomId:       j.meta?.room_id,
+    speakerCount: j.transcript?.speakerCount,
+    error:        j.error,
+    mocked:       j.azureSpeech?.mocked
+  }));
+  res.json({ ok: true, count: jobs.length, jobs });
+});
+
+app.get("/api/jobs/:jobId", (req, res) => {
+  const j = jobProcessor.getJob(req.params.jobId);
+  if (!j) return res.status(404).json({ ok: false, error: "job not found" });
+  res.json({
+    ok: true,
+    jobId:     j.jobId,
+    status:    j.status,
+    createdAt: j.createdAt,
+    completedAt: j.completedAt,
+    meta:      j.meta,
+    error:     j.error,
+    mocked:    j.azureSpeech?.mocked,
+    publishedUrl:    j.publishedUrl,
+    publishExpiresAt:j.publishExpiresAt,
+    transcript:      j.transcript,
+    minutes: j.minutes ? {
+      tokensIn:    j.minutes.tokensIn,
+      tokensOut:   j.minutes.tokensOut,
+      model:       j.minutes.model,
+      mocked:      j.minutes.mocked,
+      generatedAt: j.minutes.generatedAt,
+      docxSize:    j.minutes.docxSize,
+      docxFilename:j.minutes.docxFilename,
+      downloadUrl: `/api/minutes/${j.jobId}/download`,
+      markdownUrl: `/api/minutes/${j.jobId}/markdown`
+    } : null
+  });
+});
+
+
+// W3: minutes download
+app.get("/api/minutes/:jobId/download", (req, res) => {
+  const j = jobProcessor.getJob(req.params.jobId);
+  if (!j) return res.status(404).json({ ok: false, error: "job not found" });
+  if (!j.minutes?.docxPath) return res.status(404).json({ ok: false, error: "docx not yet generated" });
+  if (!fs.existsSync(j.minutes.docxPath)) return res.status(410).json({ ok: false, error: "docx gone" });
+  const filename = j.minutes.docxFilename || `${j.jobId}.docx`;
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(filename)}"`);
+  fs.createReadStream(j.minutes.docxPath).pipe(res);
+});
+
+// W3: markdown preview
+app.get("/api/minutes/:jobId/markdown", (req, res) => {
+  const j = jobProcessor.getJob(req.params.jobId);
+  if (!j) return res.status(404).json({ ok: false, error: "job not found" });
+  if (!j.minutes?.markdown) return res.status(404).json({ ok: false, error: "minutes not yet generated" });
+  res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+  res.send(j.minutes.markdown);
+});
+
 app.get("/healthz", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("════════════════════════════════════════════════════════");
-  console.log(`  OccupancyCounter Test Dashboard`);
-  console.log(`  Listening on http://localhost:${PORT}`);
-  console.log("");
-  console.log("  Endpoints:");
-  console.log(`    POST /ingest/headcount   - Android アプリからのカウント受信`);
-  console.log(`    GET  /                   - ダッシュボード(同梱版)`);
-  console.log(`    DELETE /api/state        - 状態リセット`);
-  console.log("");
-  console.log(`  CORS Origin: ${process.env.CORS_ORIGIN || "*"}`);
-  console.log("");
-  console.log("  Device mapping:");
-  Object.entries(deviceMap).forEach(([d, r]) => console.log(`    ${d}  ->  ${r}`));
-  console.log("════════════════════════════════════════════════════════");
+  console.log("OccupancyCounter Test Dashboard");
+  console.log(`Listening on http://localhost:${PORT}`);
+  console.log("Endpoints:");
+  console.log("  POST /ingest/headcount");
+  console.log("  POST /ingest/recording (multipart)");
+  console.log("  GET  /api/state");
+  console.log("  GET  /api/recordings");
+  console.log("  GET  /api/jobs / /api/jobs/:jobId");
+  console.log("  GET  /api/minutes/:jobId/download (.docx)");
+  console.log("  GET  /api/minutes/:jobId/markdown");
+  console.log("  GET  /public-audio/:token/:filename");
+  console.log(`Speech mock: ${process.env.AZURE_SPEECH_MOCK || "(unset)"}`);
+  console.log(`Claude mock: ${process.env.CLAUDE_MOCK || "(unset, will mock if no key)"}`);
 });
