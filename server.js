@@ -11,8 +11,10 @@ const express = require("express");
 const path = require("path");
 
 // W2: Azure Speech 連携サービス
-const jobProcessor   = require("./services/job-processor");
-const audioPublisher = require("./services/audio-publisher");
+const jobProcessor    = require("./services/job-processor");
+const audioPublisher  = require("./services/audio-publisher");
+// 優先度4: functions/ 統合 - Azure Storage Queue コンシューマー
+const queueConsumer   = require("./services/queue-consumer");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -300,6 +302,10 @@ app.get("/api/minutes/:jobId/markdown", (req, res) => {
 
 app.get("/healthz", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
+// ─── Graceful shutdown ─────────────────────────────────────────
+process.on("SIGTERM", () => { queueConsumer.stop(); process.exit(0); });
+process.on("SIGINT",  () => { queueConsumer.stop(); process.exit(0); });
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log("OccupancyCounter Test Dashboard");
   console.log(`Listening on http://localhost:${PORT}`);
@@ -314,4 +320,7 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log("  GET  /public-audio/:token/:filename");
   console.log(`Speech mock: ${process.env.AZURE_SPEECH_MOCK || "(unset)"}`);
   console.log(`Claude mock: ${process.env.CLAUDE_MOCK || "(unset, will mock if no key)"}`);
+
+  // 優先度4: functions/ → Queue → TestDashboard 統合
+  queueConsumer.start();
 });

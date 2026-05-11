@@ -182,12 +182,111 @@ async function uploadDocxAndShare({ filePath, filename, subFolder = "" }) {
   };
 }
 
+// ─── Teams 会議文字起こし取得 ────────────────────────────────────
+/**
+ * Microsoft Graph から Teams 会議のトランスクリプト (VTT) を取得し
+ * job-processor が扱う segments 配列に変換して返す。
+ *
+ * 必要権限: OnlineMeetingTranscript.Read.All (Application)
+ *
+ * @param {string} meetingId    - onlineMeetings の id
+ * @param {string} transcriptId - transcripts の id
+ * @returns {Promise<{ segments: Array, raw: string, mocked: boolean }>}
+ */
+async function getTeamsTranscript(meetingId, transcriptId) {
+  if (isMock()) {
+    console.log(`[graph][MOCK] getTeamsTranscript meetingId=${meetingId} transcriptId=${transcriptId}`);
+    return {
+      segments: _mockSegments(),
+      raw: "",
+      mocked: true
+    };
+  }
+
+  const token = await getGraphToken();
+  const url = `${GRAPH_BASE}/communications/onlineMeetings/${encodeURIComponent(meetingId)}/transcripts/${encodeURIComponent(transcriptId)}/content?$format=text/vtt`;
+
+  const r = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "text/vtt" }
+  });
+  if (!r.ok) {
+    const txt = await r.text();
+    throw new Error(`getTeamsTranscript failed: HTTP ${r.status} ${txt}`);
+  }
+  const vttText = await r.text();
+  const segments = parseVttToSegments(vttText);
+  return { segments, raw: vttText, mocked: false };
+}
+
+/**
+ * VTT 文字列を segments 配列に変換する。
+ *   入力例:
+ *     WEBVTT
+ *
+ *     00:00:01.000 --> 00:00:05.000
+ *     <v 田中>こんにちは、本日の会議を始めます。</v>
+ *
+ * @param {string} vttText
+ * @returns {Array<{ start: number, end: number, speakerLabel: string, text: string }>}
+ */
+function parseVttToSegments(vttText) {
+  const segments = [];
+  const cueRegex = /(\d{2}:\d{2}:\d{2}[.,]\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2}[.,]\d{3})\s*\n([\s\S]*?)(?=\n\n|\n*$)/g;
+
+  let match;
+  while ((match = cueRegex.exec(vttText)) !== null) {
+    const startSec = _vttTimeToSec(match[1]);
+    const endSec   = _vttTimeToSec(match[2]);
+    const rawText  = match[3].trim();
+
+    // <v SpeakerName>text</v> 形式をパース
+    const vTagMatch = rawText.match(/^<v\s+([^>]+)>([\s\S]*?)<\/v>$/s);
+    if (vTagMatch) {
+      segments.push({
+        start:       startSec,
+        end:         endSec,
+        speakerLabel: vTagMatch[1].trim(),
+        text:        vTagMatch[2].trim()
+      });
+    } else {
+      // タグなし: speakerLabel を "Unknown" として扱う
+      const plain = rawText.replace(/<[^>]+>/g, "").trim();
+      if (plain) {
+        segments.push({ start: startSec, end: endSec, speakerLabel: "Unknown", text: plain });
+      }
+    }
+  }
+  return segments;
+}
+
+function _vttTimeToSec(ts) {
+  // "HH:MM:SS.mmm" or "HH:MM:SS,mmm"
+  const cleaned = ts.replace(",", ".");
+  const parts = cleaned.split(":");
+  const hh = parseFloat(parts[0] || 0);
+  const mm = parseFloat(parts[1] || 0);
+  const ss = parseFloat(parts[2] || 0);
+  return hh * 3600 + mm * 60 + ss;
+}
+
+function _mockSegments() {
+  return [
+    { start: 0,   end: 5,   speakerLabel: "田中",   text: "本日の会議を始めます。先週の進捗から確認させてください。" },
+    { start: 6,   end: 12,  speakerLabel: "鈴木",   text: "ご報告します。先週のタスクは予定通り完了しています。" },
+    { start: 13,  end: 20,  speakerLabel: "田中",   text: "ありがとうございます。次はシステム統合テストの件はいかがでしょうか。" },
+    { start: 21,  end: 30,  speakerLabel: "佐藤",   text: "テストコードを作成中です。今週末には完了できる見込みです。" },
+    { start: 31,  end: 38,  speakerLabel: "田中",   text: "了解しました。それでは以上で本日の会議を終了します。" }
+  ];
+}
+
 module.exports = {
   isMock,
   getGraphToken,
   uploadDocxToOneDrive,
   createShareLink,
   uploadDocxAndShare,
+  getTeamsTranscript,
+  parseVttToSegments,
   // テスト用
   sanitizeFilename
 };

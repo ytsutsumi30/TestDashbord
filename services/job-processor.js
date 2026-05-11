@@ -192,10 +192,139 @@ async function processJob(jobId) {
   }
 }
 
+/**
+ * Teams 文字起こしキュー経由で受信したジョブを開始する。
+ * Azure Speech をスキップし、取得済み segments から直接議事録生成を行う。
+ *
+ * @param {object} args
+ * @param {string} args.jobId
+ * @param {Array}  args.segments  - [{ start, end, speakerLabel, text }, …]
+ * @param {object} args.meta      - { title, room_id, started_at, ended_at, language, meetingId, transcriptId }
+ * @param {boolean} [args.mocked]
+ * @returns {Promise<object>} job state
+ */
+async function startJobFromTeams(args) {
+  const { jobId, segments, meta, mocked = false } = args;
+  const job = {
+    jobId,
+    status: STATUS.QUEUED,
+    createdAt: new Date().toISOString(),
+    audioFile: null,
+    meta,
+    azureSpeech: { mocked: true, skipped: true },
+    source: "teams_webhook",
+    error: null,
+    transcript: null
+  };
+  jobStore.set(jobId, job);
+
+  process.nextTick(() => processJobFromTeams(jobId, segments, mocked).catch(err => {
+    console.error(`[job ${jobId}] uncaught error (Teams)`, err);
+  }));
+
+  return job;
+}
+
+async function processJobFromTeams(jobId, segments, mocked) {
+  const job = jobStore.get(jobId);
+  if (!job) return;
+
+  try {
+    // 1. transcript を保存 (Azure Speech スキップ)
+    job.status = STATUS.TRANSCRIBING;
+    job.transcript = {
+      speakerCount: new Set(segments.map(s => s.speakerLabel)).size,
+      wordCount:    segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0),
+      segments,
+      completedAt: new Date().toISOString(),
+      source: "teams_graph_api"
+    };
+
+    const outPath = path.join(TRANSCRIPTS_DIR, `${jobId}.json`);
+    fs.writeFileSync(outPath, JSON.stringify({
+      job: {
+        jobId,
+        meta: job.meta,
+        createdAt: job.createdAt,
+        completedAt: job.transcript.completedAt,
+        source: "teams_webhook"
+      },
+      transcript: job.transcript
+    }, null, 2), "utf8");
+    job.transcriptPath = outPath;
+    console.log(`[job ${jobId}] Teams transcript saved segments=${segments.length} speakers=${job.transcript.speakerCount}`);
+
+    // 2. Claude で議事録 Markdown 生成
+    job.status = STATUS.SUMMARIZING;
+    const summarized = await claude.generateMinutes({ meta: job.meta, segments });
+    job.minutes = {
+      markdown:    summarized.markdown,
+      tokensIn:    summarized.tokensIn,
+      tokensOut:   summarized.tokensOut,
+      model:       summarized.model,
+      mocked:      summarized.mocked,
+      generatedAt: new Date().toISOString()
+    };
+    const mdPath = path.join(MINUTES_MD_DIR, `${jobId}.md`);
+    fs.writeFileSync(mdPath, summarized.markdown, "utf8");
+    job.minutes.mdPath = mdPath;
+    console.log(`[job ${jobId}] minutes generated chars=${summarized.markdown.length} mocked=${summarized.mocked}`);
+
+    // 3. .docx 生成
+    job.status = STATUS.BUILDING_DOCX;
+    const docxResult = await docxBuilder.buildDocx({
+      jobId,
+      meta: job.meta,
+      summary: {
+        speakerCount: job.transcript.speakerCount,
+        wordCount:    job.transcript.wordCount,
+        segmentCount: segments.length
+      },
+      markdown: summarized.markdown
+    });
+    job.minutes.docxPath     = docxResult.path;
+    job.minutes.docxSize     = docxResult.size;
+    job.minutes.docxFilename = docxResult.filename;
+    console.log(`[job ${jobId}] docx built ${docxResult.path} size=${docxResult.size}B`);
+
+    // 4. OneDrive 自動アップロード
+    job.status = STATUS.UPLOADING;
+    try {
+      const safeTitle    = (job.meta?.title || "untitled").substring(0, 40).replace(/[\\\/:*?"<>|#%]/g, "_");
+      const friendlyName = `${job.meta?.room_id || "unknown"}_${safeTitle}_${jobId}.docx`;
+      const ud = await graph.uploadDocxAndShare({
+        filePath: docxResult.path,
+        filename: friendlyName,
+        subFolder: job.meta?.room_id || ""
+      });
+      job.minutes.onedrive = {
+        driveItemId: ud.driveItemId,
+        webUrl:      ud.webUrl,
+        shareUrl:    ud.shareUrl,
+        name:        ud.name,
+        mocked:      ud.mocked,
+        uploadedAt:  new Date().toISOString()
+      };
+      console.log(`[job ${jobId}] onedrive uploaded mocked=${ud.mocked}`);
+    } catch (err) {
+      console.warn(`[job ${jobId}] OneDrive upload failed (継続): ${err.message}`);
+      job.minutes.onedrive = { error: err.message };
+    }
+
+    job.status = STATUS.COMPLETED;
+    job.completedAt = new Date().toISOString();
+  } catch (err) {
+    job.status = STATUS.FAILED;
+    job.error = err.message;
+    console.error(`[job ${jobId}] FAILED (Teams): ${err.message}`);
+  }
+}
+
 module.exports = {
   STATUS,
   startJob,
   processJob,
+  startJobFromTeams,
   getJob,
   listJobs
 };
