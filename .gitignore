@@ -1,5 +1,6 @@
 node_modules/
 server.log
+*.log
 npm-debug.log*
 .DS_Store
 .idea/
@@ -20,6 +21,8 @@ storage/minutes/*
 !storage/minutes/.gitkeep
 storage/minutes-md/*
 !storage/minutes-md/.gitkeep
+storage/jobs/*
+!storage/jobs/.gitkeep
 
 # 録音ファイル本体は除外、ディレクトリは保持
 recordings/*
