@@ -172,6 +172,7 @@ async function processJob(jobId) {
       meta: job.meta,
       segments: result.segments
     });
+    summarized.markdown = withTranscriptAppendix(summarized.markdown, result.segments);
     job.minutes = {
       markdown:  summarized.markdown,
       tokensIn:  summarized.tokensIn,
@@ -326,6 +327,7 @@ async function processJobFromTeams(jobId, segments, mocked) {
     job.status = STATUS.SUMMARIZING;
     persistJob(job);
     const summarized = await claude.generateMinutes({ meta: job.meta, segments });
+    summarized.markdown = withTranscriptAppendix(summarized.markdown, segments);
     job.minutes = {
       markdown:    summarized.markdown,
       tokensIn:    summarized.tokensIn,
@@ -393,11 +395,40 @@ async function processJobFromTeams(jobId, segments, mocked) {
   }
 }
 
+function withTranscriptAppendix(markdown, segments) {
+  const base = String(markdown || "").trim();
+  if (/^##\s+文字起こし全文/m.test(base)) return base;
+  const rows = (segments || []).map(segment => {
+    const time = formatHMS(segment.start);
+    const speaker = escapeMarkdownTableCell(segment.speakerLabel || "Unknown");
+    const text = escapeMarkdownTableCell(segment.text || "");
+    return `| ${time} | ${speaker} | ${text} |`;
+  }).join("\n") || "| — | — | 発言なし |";
+  const appendix = `## 文字起こし全文\n\n| 時刻 | 話者 | 発言 |\n|---|---|---|\n${rows}`;
+  return `${base}\n\n${appendix}\n`;
+}
+
+function escapeMarkdownTableCell(value) {
+  return String(value)
+    .replace(/\r?\n/g, " ")
+    .replace(/\|/g, "\\|")
+    .trim();
+}
+
+function formatHMS(sec) {
+  sec = Math.floor(sec || 0);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 module.exports = {
   STATUS,
   startJob,
   processJob,
   startJobFromTeams,
   getJob,
-  listJobs
+  listJobs,
+  withTranscriptAppendix
 };

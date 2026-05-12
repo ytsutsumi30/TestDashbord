@@ -111,16 +111,16 @@ function buildHr() {
 
 function buildMetaTable(rows) {
   return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
+    width: { size: 9000, type: WidthType.DXA },
     rows: rows.map(([label, value]) => new TableRow({
       children: [
         new TableCell({
-          width: { size: 30, type: WidthType.PERCENTAGE },
+          width: { size: 2700, type: WidthType.DXA },
           shading: { fill: "F1F5F9" },
           children: [ new Paragraph({ children: [ new TextRun({ text: label, bold: true, size: 20 }) ] }) ]
         }),
         new TableCell({
-          width: { size: 70, type: WidthType.PERCENTAGE },
+          width: { size: 6300, type: WidthType.DXA },
           children: [ new Paragraph({ children: [ new TextRun({ text: String(value), size: 20 }) ] }) ]
         })
       ]
@@ -186,9 +186,12 @@ function markdownToParagraphs(md) {
         bullet: { level: 0 }
       }));
     } else if (/^\s*\d+\.\s+/.test(line)) {
+      const m = line.match(/^\s*(\d+)\.\s+(.*)$/);
       paras.push(new Paragraph({
-        children: parseInline(line.replace(/^\s*\d+\.\s+/, "")),
-        numbering: { reference: "default-numbering", level: 0 }
+        children: [
+          new TextRun({ text: `${m?.[1] || "1"}. `, bold: true }),
+          ...parseInline(m?.[2] || line.replace(/^\s*\d+\.\s+/, ""))
+        ]
       }));
     } else if (line.trim() === "") {
       paras.push(emptyPara());
@@ -209,7 +212,7 @@ function buildMarkdownTable(lines) {
   if (dataRows.length === 0) return emptyPara();
 
   return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
+    width: { size: 9000, type: WidthType.DXA },
     rows: dataRows.map((cells, ri) => new TableRow({
       tableHeader: ri === 0,
       children: cells.map(c => new TableCell({
