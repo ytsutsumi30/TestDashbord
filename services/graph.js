@@ -5,7 +5,10 @@
 // 共有リンクを取得する。
 //
 // 認証フロー: OAuth2 client_credentials (Application permission)
-//   必要権限: Files.ReadWrite.All
+//   必要権限:
+//     Files.ReadWrite.All
+//     OnlineMeetingTranscript.Read.All
+//     OnlineMeetingRecording.Read.All
 //
 // 環境変数:
 //   MS_TENANT_ID     ... Azure AD テナント ID
@@ -218,6 +221,69 @@ async function getTeamsTranscript(meetingId, transcriptId) {
   return { segments, raw: vttText, mocked: false };
 }
 
+async function listTeamsRecordings(meetingId) {
+  if (isMock()) {
+    return [{
+      id: `mock-recording-${meetingId || "meeting"}`,
+      meetingId,
+      contentCorrelationId: "mock-correlation",
+      createdDateTime: new Date().toISOString(),
+      mocked: true
+    }];
+  }
+  if (!meetingId) throw new Error("meetingId is required");
+
+  const token = await getGraphToken();
+  const url = `${GRAPH_BASE}/users/${encodeURIComponent(USER_UPN)}/onlineMeetings/${encodeURIComponent(meetingId)}/recordings`;
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`listTeamsRecordings failed: HTTP ${response.status} ${text}`);
+  }
+  const data = await response.json();
+  return data.value || [];
+}
+
+async function findTeamsRecording({ meetingId, transcriptId, recordingId }) {
+  if (recordingId) return { id: recordingId, meetingId };
+  const recordings = await listTeamsRecordings(meetingId);
+  if (!recordings.length) return null;
+  return recordings.find(r => r.id === transcriptId) ||
+    recordings.find(r => r.contentCorrelationId && r.contentCorrelationId === transcriptId) ||
+    recordings.sort((a, b) => String(b.createdDateTime || "").localeCompare(String(a.createdDateTime || "")))[0];
+}
+
+async function downloadTeamsRecording({ meetingId, transcriptId, recordingId, outputDir, filename }) {
+  if (!meetingId) throw new Error("meetingId is required");
+  const recording = await findTeamsRecording({ meetingId, transcriptId, recordingId });
+  if (!recording?.id) return null;
+
+  fs.mkdirSync(outputDir, { recursive: true });
+  const safeName = sanitizeFilename(filename || `${recording.id}.mp4`);
+  const outputPath = path.join(outputDir, safeName);
+
+  if (isMock()) {
+    fs.writeFileSync(outputPath, Buffer.from(`mock teams recording ${recording.id}`));
+    return { recording, filePath: outputPath, size: fs.statSync(outputPath).size, mocked: true };
+  }
+
+  const token = await getGraphToken();
+  const url = `${GRAPH_BASE}/users/${encodeURIComponent(USER_UPN)}/onlineMeetings/${encodeURIComponent(meetingId)}/recordings/${encodeURIComponent(recording.id)}/content`;
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`downloadTeamsRecording failed: HTTP ${response.status} ${text}`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  fs.writeFileSync(outputPath, buffer);
+  return { recording, filePath: outputPath, size: buffer.length, mocked: false };
+}
+
 /**
  * VTT 文字列を segments 配列に変換する。
  *   入力例:
@@ -286,6 +352,9 @@ module.exports = {
   createShareLink,
   uploadDocxAndShare,
   getTeamsTranscript,
+  listTeamsRecordings,
+  findTeamsRecording,
+  downloadTeamsRecording,
   parseVttToSegments,
   // テスト用
   sanitizeFilename

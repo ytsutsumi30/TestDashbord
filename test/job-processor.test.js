@@ -5,6 +5,7 @@ const test = require("node:test");
 
 process.env.CLAUDE_MOCK = "true";
 process.env.GRAPH_MOCK = "true";
+process.env.SPEAKER_AUDIO_IDENTIFICATION_ENABLED = "false";
 
 const jobProcessor = require("../services/job-processor");
 

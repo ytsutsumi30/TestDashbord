@@ -195,7 +195,7 @@ body {
 .status-enrolled { color: var(--green); background: rgba(54,224,140,0.14); border-color: rgba(54,224,140,0.28); }
 .status-enrolling, .status-training { color: var(--orange); background: rgba(245,166,35,0.14); border-color: rgba(245,166,35,0.28); }
 .status-failed { color: var(--red); background: rgba(239,77,77,0.14); border-color: rgba(239,77,77,0.28); }
-.status-transcribing, .status-summarizing, .status-building_docx, .status-uploading_onedrive {
+.status-transcribing, .status-identifying_speakers, .status-summarizing, .status-building_docx, .status-uploading_onedrive {
   color: var(--orange);
   background: rgba(245,166,35,0.14);
   border-color: rgba(245,166,35,0.28);
@@ -216,6 +216,20 @@ body {
   padding: 8px 10px;
   font-size: 11px;
   margin-bottom: 12px;
+}
+.speaker-identification-note {
+  border: 1px solid rgba(54,224,140,0.28);
+  background: rgba(54,224,140,0.10);
+  color: #b8e6c8;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 11px;
+  margin-bottom: 12px;
+}
+.speaker-identification-note.muted {
+  border-color: rgba(135,148,179,0.22);
+  background: rgba(135,148,179,0.08);
+  color: var(--muted);
 }
 .action-link {
   border: 1px solid rgba(77,140,255,0.35);

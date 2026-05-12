@@ -250,7 +250,7 @@ function renderJobs(jobs) {
           <span class="status-badge ${statusClass(j.status)}">${escapeHtml(j.status)}</span>
         </div>
       <div class="job-row-meta">
-          ${escapeHtml(created)} / ${escapeHtml(j.roomId || "room未設定")} / speakers=${escapeHtml(j.speakerCount ?? "—")}${j.speakerInference?.applied ? " / 推定あり" : ""}
+          ${escapeHtml(created)} / ${escapeHtml(j.roomId || "room未設定")} / speakers=${escapeHtml(j.speakerCount ?? "—")}${j.speakerIdentification?.applied ? " / 音声識別あり" : ""}${j.speakerInference?.applied ? " / 推定あり" : ""}
       </div>
         ${j.error ? `<div class="job-error">${escapeHtml(j.error)}</div>` : ""}
       </button>`;
@@ -310,6 +310,7 @@ function jobDetailHtml(job) {
       <div><span>Model</span><b>${escapeHtml(minutes?.model || "—")}</b></div>
       <div><span>DOCX</span><b>${escapeHtml(formatBytes(minutes?.docxSize))}</b></div>
     </div>
+    ${speakerIdentificationHtml(job.speakerIdentification)}
     ${speakerInferenceHtml(job.speakerInference)}
     ${job.error ? `<div class="detail-error">${escapeHtml(job.error)}</div>` : ""}
     <div class="detail-actions">${download}${markdown}${share}</div>
@@ -324,6 +325,20 @@ function speakerInferenceHtml(info) {
       / 推定話者数=${escapeHtml(info.inferredSpeakerCount ?? "—")}
       / 未識別=${escapeHtml(info.unknownCount ?? "—")}
       <br>${escapeHtml(info.note || "Text-only inference. Review required.")}
+    </div>`;
+}
+
+function speakerIdentificationHtml(info) {
+  if (!info) return "";
+  const cls = info.applied ? "speaker-identification-note" : "speaker-identification-note muted";
+  return `
+    <div class="${cls}">
+      音声話者識別: ${escapeHtml(info.reason || "unknown")}
+      / 候補profile=${escapeHtml(info.candidateProfileCount ?? "—")}
+      / 識別=${escapeHtml(info.identifiedCount ?? 0)}
+      / 未識別=${escapeHtml(info.unknownCount ?? "—")}
+      ${info.threshold != null ? `/ threshold=${escapeHtml(info.threshold)}` : ""}
+      <br>${escapeHtml(info.note || "Audio-based speaker identification.")}
     </div>`;
 }
 

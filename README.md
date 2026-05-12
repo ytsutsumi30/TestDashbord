@@ -369,11 +369,40 @@ Cloudflareなしでも、同じWi-Fi内なら直接接続できます:
 |---|---|---|
 | POST | `/ingest/headcount` | Android アプリからのカウント受信 |
 | POST | `/ingest/recording` | Android アプリからの録音ファイル受信 (`multipart/form-data`: `meta`, `audio`) |
+| GET  | `/api/speaker-profiles` | 話者profile一覧 |
+| POST | `/api/speaker-profiles` | 話者profile作成 + 登録音声enrollment (`multipart/form-data`) |
+| POST | `/api/speaker-profiles/:id/enroll` | 既存話者profileへ追加音声enrollment |
+| POST | `/api/speaker-profiles/:id/refresh` | Azure側のenrollment状態を再取得 |
+| DELETE | `/api/speaker-profiles/:id` | 話者profile削除 |
 | GET  | `/api/state` | 現在状態（JSON）。3秒ごとにダッシュボードがポーリング |
 | POST | `/api/devices` | `device_id` ↔ 会議室 マッピング登録（body: `{"device_id":"...","room_id":"medium"}`） |
 | DELETE | `/api/state` | 全会議室の状態リセット |
 | GET  | `/healthz` | ヘルスチェック |
 | GET  | `/` | ダッシュボード(HTML) |
+
+### 音声話者識別
+
+Teams transcript の話者が会議室マイク等で同一になった場合、以下の流れで録画音声から話者ラベルを反映します。
+
+1. ダッシュボードの「話者プロファイル管理」で参加者のWAV/PCM音声を登録
+2. Teams transcript通知ジョブでGraphから録画を取得
+3. Azure Speech diarizationで `Speaker 1` 等に音声分離
+4. ffmpegで代表音声区間をWAV切り出し
+5. Azure Speaker Recognitionで登録profileと照合
+6. しきい値以上のみ transcript の `speakerLabel` を実名へ置換
+
+主な環境変数:
+
+| 変数 | 用途 |
+|---|---|
+| `SPEAKER_AUDIO_IDENTIFICATION_ENABLED` | Teams録画音声による話者識別の有効/無効 |
+| `SPEAKER_RECOGNITION_ENDPOINT` / `SPEAKER_RECOGNITION_KEY` | Azure Speaker Recognition接続先 |
+| `SPEAKER_IDENTIFICATION_MIN_SCORE` | profile照合を採用する最小score |
+| `SPEAKER_IDENTIFICATION_MIN_SEGMENT_SEC` | 識別に使う代表音声区間の最小秒数 |
+| `SPEAKER_KEEP_TEAM_RECORDINGS` | 取得したTeams録画を処理後も保存するか |
+| `FFMPEG_BIN` | 音声区間切り出しに使うffmpeg実行ファイル |
+
+低信頼の発話は `話者未識別` に残します。声紋profileは個人識別情報として扱い、本人同意と社内規程に従って運用してください。
 
 ### 会議室 ID
 

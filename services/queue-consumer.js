@@ -89,7 +89,8 @@ async function _processMessage(msg) {
     ended_at:     body.endDateTime   || new Date().toISOString(),
     language:     body.language || "ja-JP",
     meetingId,
-    transcriptId
+    transcriptId,
+    recordingId:   body.recordingId || body.recording_id || null
   };
 
   await jobProcessor.startJobFromTeams({

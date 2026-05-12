@@ -118,6 +118,46 @@ async function deleteIdentificationProfile(profileId) {
   return await parseResponse(response, "delete speaker profile");
 }
 
+async function identifySingleSpeaker({ audioFile, profileIds, ignoreMinLength = false }) {
+  if (!audioFile) throw new Error("audioFile is required");
+  const candidates = (profileIds || []).filter(Boolean);
+  if (candidates.length < 1) throw new Error("profileIds is required");
+  if (candidates.length > 50) throw new Error("profileIds supports up to 50 candidates");
+
+  if (isMock()) {
+    const stat = fs.existsSync(audioFile) ? fs.statSync(audioFile) : { size: 0 };
+    const index = stat.size > 0 ? stat.size % candidates.length : 0;
+    const profileId = candidates[index];
+    return {
+      identifiedProfile: { profileId, score: 0.92 },
+      profilesRanking: candidates.slice(0, 5).map((id, i) => ({
+        profileId: id,
+        score: i === index ? 0.92 : Math.max(0.1, 0.55 - i * 0.08)
+      })),
+      mocked: true
+    };
+  }
+
+  const query = new URLSearchParams({
+    "api-version": API_VERSION,
+    profileIds: candidates.join(",")
+  });
+  if (ignoreMinLength) query.set("ignoreMinLength", "true");
+
+  const response = await fetch(
+    `${ENDPOINT}/speaker-recognition/identification/text-independent/profiles:identifySingleSpeaker?${query}`,
+    {
+      method: "POST",
+      headers: {
+        "Ocp-Apim-Subscription-Key": KEY,
+        "Content-Type": "audio/wav; codecs=audio/pcm"
+      },
+      body: fs.readFileSync(audioFile)
+    }
+  );
+  return await parseResponse(response, "identify single speaker");
+}
+
 async function parseResponse(response, operation) {
   const text = await response.text();
   const body = text ? safeJson(text) : {};
@@ -140,5 +180,6 @@ module.exports = {
   createIdentificationProfile,
   enrollIdentificationProfile,
   getIdentificationProfile,
-  deleteIdentificationProfile
+  deleteIdentificationProfile,
+  identifySingleSpeaker
 };
