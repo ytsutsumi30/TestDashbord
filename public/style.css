@@ -279,6 +279,22 @@ body {
 .checkbox-row { flex-direction: row !important; align-items: center; }
 .checkbox-row input { width: auto; }
 .form-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mic-recorder {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.02);
+  padding: 10px;
+}
+.mic-recorder-head, .mic-recorder-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mic-recorder-actions { justify-content: flex-start; margin-top: 8px; flex-wrap: wrap; }
+.mic-recorder-player { width: 100%; margin-top: 8px; display: none; }
+.mic-recorder-player.ready { display: block; }
+.mic-recorder-hint { color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: 8px; }
 .speaker-profile-list { min-height: 220px; max-height: 420px; overflow-y: auto; }
 .speaker-profile-card {
   border: 1px solid var(--line);

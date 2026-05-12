@@ -15,6 +15,11 @@ let lastEntryCount = 0;
 let selectedJobId = null;
 let lastJobsSignature = "";
 let lastSpeakerProfilesSignature = "";
+let micRecorder = null;
+let micRecorderStream = null;
+let micRecorderChunks = [];
+let micRecordingStartedAt = 0;
+let micRecordingObjectUrl = null;
 
 async function poll() {
   try {
@@ -409,6 +414,7 @@ async function submitSpeakerProfileForm(event) {
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     form.reset();
     form.elements.locale.value = "ja-JP";
+    clearMicRecording();
     message.textContent = "登録しました";
     lastSpeakerProfilesSignature = "";
     renderSpeakerProfiles([data.profile]);
@@ -416,6 +422,168 @@ async function submitSpeakerProfileForm(event) {
   } catch (e) {
     message.textContent = `登録失敗: ${e.message}`;
   }
+}
+
+async function startMicRecording() {
+  const status = document.getElementById("micRecorderStatus");
+  const startButton = document.getElementById("micStartButton");
+  const stopButton = document.getElementById("micStopButton");
+  const clearButton = document.getElementById("micClearButton");
+
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    status.textContent = "このブラウザはマイク録音に未対応です";
+    return;
+  }
+
+  try {
+    clearMicRecording({ keepStatus: true });
+    micRecorderStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        noiseSuppression: true,
+        echoCancellation: true
+      }
+    });
+    micRecorderChunks = [];
+    micRecorder = new MediaRecorder(micRecorderStream);
+    micRecorder.ondataavailable = event => {
+      if (event.data?.size) micRecorderChunks.push(event.data);
+    };
+    micRecorder.onstop = finalizeMicRecording;
+    micRecordingStartedAt = Date.now();
+    micRecorder.start();
+
+    startButton.disabled = true;
+    stopButton.disabled = false;
+    clearButton.disabled = true;
+    status.textContent = "録音中...";
+  } catch (error) {
+    status.textContent = `録音開始失敗: ${error.message}`;
+  }
+}
+
+function stopMicRecording() {
+  const stopButton = document.getElementById("micStopButton");
+  const status = document.getElementById("micRecorderStatus");
+  if (micRecorder?.state === "recording") {
+    stopButton.disabled = true;
+    status.textContent = "WAV変換中...";
+    micRecorder.stop();
+  }
+}
+
+async function finalizeMicRecording() {
+  const status = document.getElementById("micRecorderStatus");
+  const startButton = document.getElementById("micStartButton");
+  const clearButton = document.getElementById("micClearButton");
+  const audioInput = document.querySelector("#speakerProfileForm input[name='audio']");
+  const player = document.getElementById("micRecorderPlayer");
+  const durationSec = Math.max(1, Math.round((Date.now() - micRecordingStartedAt) / 1000));
+
+  stopMicStream();
+  try {
+    const recordedBlob = new Blob(micRecorderChunks, { type: micRecorder?.mimeType || "audio/webm" });
+    const wavBlob = await convertRecordedBlobToWav(recordedBlob);
+    const file = new File([wavBlob], `mic-enrollment-${new Date().toISOString().replace(/[:.]/g, "-")}.wav`, { type: "audio/wav" });
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    audioInput.files = transfer.files;
+
+    if (micRecordingObjectUrl) URL.revokeObjectURL(micRecordingObjectUrl);
+    micRecordingObjectUrl = URL.createObjectURL(file);
+    player.src = micRecordingObjectUrl;
+    player.classList.add("ready");
+
+    status.textContent = `録音済み ${durationSec}秒 / ${Math.round(file.size / 1024)}KB`;
+    clearButton.disabled = false;
+  } catch (error) {
+    status.textContent = `WAV変換失敗: ${error.message}`;
+  } finally {
+    startButton.disabled = false;
+    micRecorder = null;
+    micRecorderChunks = [];
+  }
+}
+
+function clearMicRecording({ keepStatus = false } = {}) {
+  const audioInput = document.querySelector("#speakerProfileForm input[name='audio']");
+  const player = document.getElementById("micRecorderPlayer");
+  const clearButton = document.getElementById("micClearButton");
+  const status = document.getElementById("micRecorderStatus");
+  stopMicStream();
+  if (micRecorder?.state === "recording") micRecorder.stop();
+  micRecorder = null;
+  micRecorderChunks = [];
+  if (audioInput) audioInput.value = "";
+  if (micRecordingObjectUrl) URL.revokeObjectURL(micRecordingObjectUrl);
+  micRecordingObjectUrl = null;
+  if (player) {
+    player.removeAttribute("src");
+    player.classList.remove("ready");
+  }
+  if (clearButton) clearButton.disabled = true;
+  if (!keepStatus && status) status.textContent = "未録音";
+}
+
+function stopMicStream() {
+  if (!micRecorderStream) return;
+  micRecorderStream.getTracks().forEach(track => track.stop());
+  micRecorderStream = null;
+}
+
+async function convertRecordedBlobToWav(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) throw new Error("AudioContext unsupported");
+  const audioContext = new AudioContextClass();
+  try {
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    const monoSamples = mixToMono(audioBuffer);
+    return encodePcm16Wav(monoSamples, audioBuffer.sampleRate);
+  } finally {
+    audioContext.close?.();
+  }
+}
+
+function mixToMono(audioBuffer) {
+  const channelCount = audioBuffer.numberOfChannels;
+  const samples = new Float32Array(audioBuffer.length);
+  for (let channel = 0; channel < channelCount; channel++) {
+    const data = audioBuffer.getChannelData(channel);
+    for (let i = 0; i < data.length; i++) samples[i] += data[i] / channelCount;
+  }
+  return samples;
+}
+
+function encodePcm16Wav(samples, sampleRate) {
+  const bytesPerSample = 2;
+  const dataSize = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * bytesPerSample, true);
+  view.setUint16(32, bytesPerSample, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, dataSize, true);
+  let offset = 44;
+  for (const sample of samples) {
+    const clamped = Math.max(-1, Math.min(1, sample));
+    view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function writeAscii(view, offset, text) {
+  for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
 }
 
 async function refreshSpeakerProfile(id) {
@@ -488,6 +656,9 @@ async function resetState() {
 // initial + interval
 const speakerProfileForm = document.getElementById("speakerProfileForm");
 if (speakerProfileForm) speakerProfileForm.addEventListener("submit", submitSpeakerProfileForm);
+document.getElementById("micStartButton")?.addEventListener("click", startMicRecording);
+document.getElementById("micStopButton")?.addEventListener("click", stopMicRecording);
+document.getElementById("micClearButton")?.addEventListener("click", () => clearMicRecording());
 poll();
 pollJobs();
 pollSpeakerProfiles();

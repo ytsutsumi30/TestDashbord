@@ -148,6 +148,19 @@
             <label>言語 <input name="locale" value="ja-JP" placeholder="ja-JP"></label>
           </div>
           <label>登録音声 <input name="audio" type="file" accept=".wav,audio/wav"></label>
+          <div class="mic-recorder" id="micRecorder">
+            <div class="mic-recorder-head">
+              <span>マイク録音登録</span>
+              <span class="muted-text" id="micRecorderStatus">未録音</span>
+            </div>
+            <div class="mic-recorder-actions">
+              <button class="mini-button" type="button" id="micStartButton">録音開始</button>
+              <button class="mini-button" type="button" id="micStopButton" disabled>録音停止</button>
+              <button class="mini-button danger" type="button" id="micClearButton" disabled>録音クリア</button>
+            </div>
+            <audio class="mic-recorder-player" id="micRecorderPlayer" controls></audio>
+            <div class="mic-recorder-hint">20秒以上、通常の会議と同じ声量で自己紹介や定型文を読み上げてください。</div>
+          </div>
           <label class="checkbox-row">
             <input name="ignoreMinLength" type="checkbox">
             <span>最小音声長を無視して登録する（検証用。精度低下に注意）</span>
