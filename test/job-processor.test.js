@@ -50,14 +50,16 @@ test("startJobFromTeams completes and persists generated artifacts", async (t) =
       language: "ja-JP"
     },
     segments: [
-      { start: 0, end: 4, speakerLabel: "田中", text: "本日の会議を始めます。" },
-      { start: 5, end: 9, speakerLabel: "鈴木", text: "進捗は予定通りです。" }
+      { start: 0, end: 4, speakerLabel: "会議室マイク", text: "田中：本日の会議を始めます。" },
+      { start: 5, end: 9, speakerLabel: "会議室マイク", text: "鈴木：進捗は予定通りです。" }
     ]
   });
 
   const job = await waitForJob(jobId, jobProcessor.STATUS.COMPLETED);
 
   assert.equal(job.transcript.speakerCount, 2);
+  assert.equal(job.speakerInference.applied, true);
+  assert.deepEqual(job.transcript.segments.map(s => s.speakerLabel), ["田中", "鈴木"]);
   assert.equal(job.minutes.mocked, true);
   assert.ok(fs.existsSync(path.join(repoRoot, "storage", "jobs", `${jobId}.json`)));
   assert.ok(fs.existsSync(path.join(repoRoot, "storage", "transcripts", `${jobId}.json`)));

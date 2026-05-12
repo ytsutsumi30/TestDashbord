@@ -206,6 +206,15 @@ body {
 .detail-grid span { display: block; color: var(--muted); font-size: 10px; margin-bottom: 3px; }
 .detail-grid b { font-size: 12px; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.speaker-inference-note {
+  border: 1px solid rgba(245,166,35,0.28);
+  background: rgba(245,166,35,0.10);
+  color: #ffd28a;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 11px;
+  margin-bottom: 12px;
+}
 .action-link {
   border: 1px solid rgba(77,140,255,0.35);
   color: var(--blue);

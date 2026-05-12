@@ -110,6 +110,83 @@ async function generateMinutes({ meta, segments }) {
   };
 }
 
+/**
+ * 文字起こしテキストから話者ラベルを推定する。
+ * 注意: テキストだけでは本人確認はできないため、低信頼の推定は呼び出し側で採用しない。
+ *
+ * @param {object} params
+ * @param {object} params.meta
+ * @param {Array<object>} params.segments
+ * @returns {Promise<Array<{index:number, speakerLabel:string, confidence:number, reason:string}>>}
+ */
+async function estimateSpeakerLabels({ meta, segments }) {
+  if (isMock()) return [];
+
+  const transcript = segments.map((s, i) => {
+    const hms = formatHMS(s.start);
+    return `${i}. [${hms}] ${s.speakerLabel}: ${s.text}`;
+  }).join("\n");
+
+  const prompt = `あなたは会議文字起こしの話者推定を支援します。
+重要: 音声本人確認はできません。文字面から明確に分かる場合だけ推定し、不明なら speakerLabel は「話者未識別」にしてください。
+
+会議情報:
+- title: ${meta?.title || ""}
+- room_id: ${meta?.room_id || ""}
+- language: ${meta?.language || "ja-JP"}
+
+文字起こし:
+${transcript}
+
+各行について、発言冒頭の「田中:」「佐藤さん：」のような明示的な話者名、または直前行からの明確な継続がある場合だけ speakerLabel を推定してください。
+JSON配列のみを返してください。余計な説明は不要です。
+形式:
+[
+  {"index":0,"speakerLabel":"田中","confidence":0.9,"reason":"発言冒頭に明示"},
+  {"index":1,"speakerLabel":"話者未識別","confidence":0.0,"reason":"根拠なし"}
+]`;
+
+  const r = await fetch(API_BASE, {
+    method: "POST",
+    headers: {
+      "x-api-key": API_KEY,
+      "anthropic-version": API_VER,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 4096,
+      system: "Return valid JSON only.",
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+
+  if (!r.ok) {
+    const txt = await r.text();
+    throw new Error(`Claude speaker inference failed: HTTP ${r.status} ${txt}`);
+  }
+
+  const data = await r.json();
+  const text = data.content?.[0]?.text || "[]";
+  return parseJsonArray(text);
+}
+
+function parseJsonArray(text) {
+  try {
+    const direct = JSON.parse(text);
+    return Array.isArray(direct) ? direct : [];
+  } catch {
+    const m = text.match(/\[[\s\S]*\]/);
+    if (!m) return [];
+    try {
+      const parsed = JSON.parse(m[0]);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+}
+
 // ─── Mock 用 (固定形式の Markdown を返す) ────────────────────────
 function generateMockMinutes({ meta, segments }) {
   const speakers = Array.from(new Set(segments.map(s => s.speakerLabel)));
@@ -157,8 +234,10 @@ ${highlights}
 module.exports = {
   isMock,
   generateMinutes,
+  estimateSpeakerLabels,
   // テスト/拡張用
   buildUserMessage,
   loadSystemPrompt,
-  formatHMS
+  formatHMS,
+  parseJsonArray
 };

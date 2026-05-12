@@ -235,9 +235,9 @@ function renderJobs(jobs) {
           <span class="job-title">${escapeHtml(j.title || j.jobId)}</span>
           <span class="status-badge ${statusClass(j.status)}">${escapeHtml(j.status)}</span>
         </div>
-        <div class="job-row-meta">
-          ${escapeHtml(created)} / ${escapeHtml(j.roomId || "room未設定")} / speakers=${escapeHtml(j.speakerCount ?? "—")}
-        </div>
+      <div class="job-row-meta">
+          ${escapeHtml(created)} / ${escapeHtml(j.roomId || "room未設定")} / speakers=${escapeHtml(j.speakerCount ?? "—")}${j.speakerInference?.applied ? " / 推定あり" : ""}
+      </div>
         ${j.error ? `<div class="job-error">${escapeHtml(j.error)}</div>` : ""}
       </button>`;
   }).join("");
@@ -296,9 +296,21 @@ function jobDetailHtml(job) {
       <div><span>Model</span><b>${escapeHtml(minutes?.model || "—")}</b></div>
       <div><span>DOCX</span><b>${escapeHtml(formatBytes(minutes?.docxSize))}</b></div>
     </div>
+    ${speakerInferenceHtml(job.speakerInference)}
     ${job.error ? `<div class="detail-error">${escapeHtml(job.error)}</div>` : ""}
     <div class="detail-actions">${download}${markdown}${share}</div>
     <pre class="markdown-preview" id="markdownPreview">Markdownプレビューは未表示です。</pre>`;
+}
+
+function speakerInferenceHtml(info) {
+  if (!info?.applied) return "";
+  return `
+    <div class="speaker-inference-note">
+      話者推定: ${escapeHtml(info.source || "unknown")}
+      / 推定話者数=${escapeHtml(info.inferredSpeakerCount ?? "—")}
+      / 未識別=${escapeHtml(info.unknownCount ?? "—")}
+      <br>${escapeHtml(info.note || "Text-only inference. Review required.")}
+    </div>`;
 }
 
 async function loadMarkdownPreview(jobId) {

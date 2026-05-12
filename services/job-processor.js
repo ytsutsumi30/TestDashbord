@@ -11,6 +11,7 @@ const azureSpeech    = require("./azure-speech");
 const claude         = require("./claude");
 const docxBuilder    = require("./docx-builder");
 const graph          = require("./graph");
+const speakerInference = require("./speaker-inference");
 
 // 永続化先: storage/transcripts/<jobId>.json + storage/minutes/<jobId>.docx + storage/jobs/<jobId>.json
 const TRANSCRIPTS_DIR = path.join(__dirname, "..", "storage", "transcripts");
@@ -281,12 +282,16 @@ async function processJobFromTeams(jobId, segments, mocked) {
     // 1. transcript を保存 (Azure Speech スキップ)
     job.status = STATUS.TRANSCRIBING;
     persistJob(job);
+    const inferred = await speakerInference.inferSpeakers({ meta: job.meta, segments });
+    segments = inferred.segments;
+    job.speakerInference = inferred.summary;
     job.transcript = {
       speakerCount: new Set(segments.map(s => s.speakerLabel)).size,
       wordCount:    segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0),
       segments,
       completedAt: new Date().toISOString(),
-      source: "teams_graph_api"
+      source: "teams_graph_api",
+      speakerInference: inferred.summary
     };
 
     const outPath = path.join(TRANSCRIPTS_DIR, `${jobId}.json`);
