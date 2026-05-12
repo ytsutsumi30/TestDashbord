@@ -13,6 +13,7 @@ const path = require("path");
 // W2: Azure Speech 連携サービス
 const jobProcessor    = require("./services/job-processor");
 const audioPublisher  = require("./services/audio-publisher");
+const speakerProfiles = require("./services/speaker-profiles");
 // 優先度4: functions/ 統合 - Azure Storage Queue コンシューマー
 const queueConsumer   = require("./services/queue-consumer");
 
@@ -230,6 +231,70 @@ app.get("/api/recordings", (_req, res) => {
     }))
   });
 });
+
+// ─── Speaker profile management ────────────────────────────────
+// 事前に話者の声紋 profile を登録し、後段の真の音声話者識別で使用する。
+app.get("/api/speaker-profiles", (_req, res) => {
+  res.json({
+    ok: true,
+    profiles: speakerProfiles.listProfiles()
+  });
+});
+
+app.get("/api/speaker-profiles/:id", (req, res) => {
+  const profile = speakerProfiles.getProfile(req.params.id);
+  if (!profile) return res.status(404).json({ ok: false, error: "speaker profile not found" });
+  res.json({ ok: true, profile });
+});
+
+app.post("/api/speaker-profiles", upload.single("audio"), async (req, res) => {
+  try {
+    const profile = await speakerProfiles.createProfile({
+      displayName: req.body.displayName,
+      email: req.body.email,
+      department: req.body.department,
+      locale: req.body.locale || "ja-JP",
+      audioFile: req.file?.path || null,
+      ignoreMinLength: req.body.ignoreMinLength === "true" || req.body.ignoreMinLength === true
+    });
+    return res.status(201).json({ ok: true, profile });
+  } catch (err) {
+    return handleApiError(res, err);
+  } finally {
+    cleanupUploadedFile(req.file);
+  }
+});
+
+app.post("/api/speaker-profiles/:id/enroll", upload.single("audio"), async (req, res) => {
+  try {
+    const profile = await speakerProfiles.enrollProfile(req.params.id, {
+      audioFile: req.file?.path || null,
+      ignoreMinLength: req.body.ignoreMinLength === "true" || req.body.ignoreMinLength === true
+    });
+    return res.json({ ok: true, profile });
+  } catch (err) {
+    return handleApiError(res, err);
+  } finally {
+    cleanupUploadedFile(req.file);
+  }
+});
+
+app.post("/api/speaker-profiles/:id/refresh", async (req, res) => {
+  try {
+    const profile = await speakerProfiles.refreshProfile(req.params.id);
+    return res.json({ ok: true, profile });
+  } catch (err) {
+    return handleApiError(res, err);
+  }
+});
+
+app.delete("/api/speaker-profiles/:id", async (req, res) => {
+  try {
+    return res.json(await speakerProfiles.deleteProfile(req.params.id));
+  } catch (err) {
+    return handleApiError(res, err);
+  }
+});
 // ─── W2: 音声ファイル公開エンドポイント ────────────────────────────
 app.get("/public-audio/:token/:filename", audioPublisher.localAudioMiddleware);
 
@@ -304,6 +369,17 @@ app.get("/api/minutes/:jobId/markdown", (req, res) => {
 });
 
 app.get("/healthz", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+
+function cleanupUploadedFile(file) {
+  if (!file?.path) return;
+  fs.promises.unlink(file.path).catch(() => {});
+}
+
+function handleApiError(res, err) {
+  const status = err.status || 500;
+  console.error("[api] error", err);
+  return res.status(status).json({ ok: false, error: err.message });
+}
 
 // ─── Graceful shutdown ─────────────────────────────────────────
 process.on("SIGTERM", () => { queueConsumer.stop(); process.exit(0); });

@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
 const { spawn } = require("node:child_process");
 const net = require("node:net");
 const path = require("node:path");
@@ -50,6 +52,8 @@ async function jsonRequest(baseUrl, pathName, options = {}) {
 test("server exposes core dashboard APIs", async (t) => {
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "speaker-profiles-"));
+  const speakerProfilesStorePath = path.join(tempDir, "speaker-profiles.json");
   const child = spawn(process.execPath, ["server.js"], {
     cwd: repoRoot,
     env: {
@@ -58,7 +62,9 @@ test("server exposes core dashboard APIs", async (t) => {
       AZURE_SPEECH_MOCK: "true",
       CLAUDE_MOCK: "true",
       GRAPH_MOCK: "true",
-      QUEUE_CONSUMER_MOCK: "true"
+      QUEUE_CONSUMER_MOCK: "true",
+      SPEAKER_RECOGNITION_MOCK: "true",
+      SPEAKER_PROFILES_STORE_PATH: speakerProfilesStorePath
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -116,4 +122,47 @@ test("server exposes core dashboard APIs", async (t) => {
   assert.equal(jobs.body.ok, true);
   assert.ok(Array.isArray(jobs.body.jobs));
 
+  const profiles = await jsonRequest(baseUrl, "/api/speaker-profiles");
+  assert.equal(profiles.response.status, 200);
+  assert.deepEqual(profiles.body.profiles, []);
+
+  const form = new FormData();
+  form.set("displayName", "谷崎");
+  form.set("email", "tanizaki@example.com");
+  form.set("department", "PSUユニット");
+  form.set("locale", "ja-JP");
+  form.set("audio", new Blob([Buffer.from("RIFFmockwav")], { type: "audio/wav" }), "tanizaki.wav");
+  const createResponse = await fetch(`${baseUrl}/api/speaker-profiles`, {
+    method: "POST",
+    body: form
+  });
+  const createBody = await createResponse.json();
+  assert.equal(createResponse.status, 201);
+  assert.equal(createBody.ok, true);
+  assert.equal(createBody.profile.displayName, "谷崎");
+  assert.equal(createBody.profile.enrollmentStatus, "Enrolled");
+  assert.equal(createBody.profile.mocked, true);
+
+  const createdId = createBody.profile.id;
+  const enrollForm = new FormData();
+  enrollForm.set("audio", new Blob([Buffer.from("RIFFmockwav2")], { type: "audio/wav" }), "tanizaki-2.wav");
+  const enrollResponse = await fetch(`${baseUrl}/api/speaker-profiles/${createdId}/enroll`, {
+    method: "POST",
+    body: enrollForm
+  });
+  const enrollBody = await enrollResponse.json();
+  assert.equal(enrollResponse.status, 200);
+  assert.equal(enrollBody.profile.enrollmentStatus, "Enrolled");
+
+  const refresh = await jsonRequest(baseUrl, `/api/speaker-profiles/${createdId}/refresh`, { method: "POST" });
+  assert.equal(refresh.response.status, 200);
+  assert.equal(refresh.body.profile.enrollmentStatus, "Enrolled");
+
+  const profilesAfterCreate = await jsonRequest(baseUrl, "/api/speaker-profiles");
+  assert.equal(profilesAfterCreate.body.profiles.length, 1);
+  assert.equal(profilesAfterCreate.body.profiles[0].displayName, "谷崎");
+
+  const deleteProfile = await jsonRequest(baseUrl, `/api/speaker-profiles/${createdId}`, { method: "DELETE" });
+  assert.equal(deleteProfile.response.status, 200);
+  assert.equal(deleteProfile.body.ok, true);
 });

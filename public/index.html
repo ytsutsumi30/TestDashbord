@@ -127,6 +127,42 @@
       </div>
     </section>
 
+    <!-- Speaker profile management -->
+    <section class="panel speaker-profile-panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">🎙 話者プロファイル管理</div>
+          <div class="panel-meta">事前登録した声紋 profile を会議録音の話者識別に使用</div>
+        </div>
+        <button class="mini-button" onclick="pollSpeakerProfiles()">更新</button>
+      </div>
+
+      <div class="speaker-profile-layout">
+        <form class="speaker-profile-form" id="speakerProfileForm">
+          <div class="form-row">
+            <label>氏名 <input name="displayName" required placeholder="例: 谷崎"></label>
+            <label>メール <input name="email" type="email" placeholder="tanizaki@example.com"></label>
+          </div>
+          <div class="form-row">
+            <label>部署 <input name="department" placeholder="例: PSUユニット"></label>
+            <label>言語 <input name="locale" value="ja-JP" placeholder="ja-JP"></label>
+          </div>
+          <label>登録音声 <input name="audio" type="file" accept=".wav,audio/wav"></label>
+          <label class="checkbox-row">
+            <input name="ignoreMinLength" type="checkbox">
+            <span>最小音声長を無視して登録する（検証用。精度低下に注意）</span>
+          </label>
+          <div class="form-actions">
+            <button class="action-link button-link" type="submit">profile作成・音声登録</button>
+            <span class="muted-text" id="speakerProfileMessage">WAV/PCM音声を推奨</span>
+          </div>
+        </form>
+        <div class="speaker-profile-list" id="speakerProfileList">
+          <div class="empty-state">話者profile取得中...</div>
+        </div>
+      </div>
+    </section>
+
     <!-- Test mode area -->
     <section class="panel test-panel">
       <div class="panel-head">

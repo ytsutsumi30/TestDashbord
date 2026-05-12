@@ -14,6 +14,7 @@ const ROOM_COLOR = {
 let lastEntryCount = 0;
 let selectedJobId = null;
 let lastJobsSignature = "";
+let lastSpeakerProfilesSignature = "";
 
 async function poll() {
   try {
@@ -36,6 +37,19 @@ async function pollJobs() {
     console.warn("jobs poll failed", e);
     const list = document.getElementById("jobsList");
     if (list) list.innerHTML = '<div class="empty-state">ジョブ取得に失敗しました</div>';
+  }
+}
+
+async function pollSpeakerProfiles() {
+  try {
+    const res = await fetch("/api/speaker-profiles", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    renderSpeakerProfiles(data.profiles || []);
+  } catch (e) {
+    console.warn("speaker profiles poll failed", e);
+    const list = document.getElementById("speakerProfileList");
+    if (list) list.innerHTML = '<div class="empty-state">話者profile取得に失敗しました</div>';
   }
 }
 
@@ -325,6 +339,101 @@ async function loadMarkdownPreview(jobId) {
   }
 }
 
+function renderSpeakerProfiles(profiles) {
+  const list = document.getElementById("speakerProfileList");
+  if (!list) return;
+
+  const signature = profiles.map(p => `${p.id}:${p.enrollmentStatus}:${p.updatedAt}:${p.error || ""}`).join("|");
+  if (signature === lastSpeakerProfilesSignature) return;
+  lastSpeakerProfilesSignature = signature;
+
+  if (!profiles.length) {
+    list.innerHTML = '<div class="empty-state">話者profileはまだ登録されていません</div>';
+    return;
+  }
+
+  list.innerHTML = profiles.map(profile => `
+    <div class="speaker-profile-card">
+      <div class="speaker-profile-head">
+        <div>
+          <div class="speaker-profile-name">${escapeHtml(profile.displayName)}</div>
+          <div class="speaker-profile-meta">${escapeHtml(profile.department || "部署未設定")} / ${escapeHtml(profile.email || "メール未設定")}</div>
+        </div>
+        <span class="status-badge ${statusClass(profile.enrollmentStatus)}">${escapeHtml(profile.enrollmentStatus || "unknown")}</span>
+      </div>
+      <div class="speaker-profile-detail">
+        Azure profile: <code>${escapeHtml(profile.azureProfileId || "—")}</code><br>
+        locale=${escapeHtml(profile.locale || "ja-JP")}
+        / enrollments=${escapeHtml(profile.enrollmentsCount ?? 0)}
+        / speech=${escapeHtml(profile.enrollmentsSpeechLengthInSec ?? "—")}s
+        / remaining=${escapeHtml(profile.remainingEnrollmentsSpeechLengthInSec ?? "—")}s
+        ${profile.mocked ? " / mock" : ""}
+      </div>
+      ${profile.error ? `<div class="job-error">${escapeHtml(profile.error)}</div>` : ""}
+      <div class="speaker-profile-actions">
+        <button class="mini-button" onclick="refreshSpeakerProfile('${escapeAttr(profile.id)}')">状態更新</button>
+        <button class="mini-button danger" onclick="deleteSpeakerProfile('${escapeAttr(profile.id)}')">削除</button>
+      </div>
+      <form class="speaker-profile-enroll-form" onsubmit="enrollSpeakerProfile(event, '${escapeAttr(profile.id)}')">
+        <input name="audio" type="file" accept=".wav,audio/wav" required>
+        <label class="inline-checkbox"><input name="ignoreMinLength" type="checkbox"> 最小音声長を無視</label>
+        <button class="mini-button" type="submit">追加音声登録</button>
+      </form>
+    </div>`).join("");
+}
+
+async function submitSpeakerProfileForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const message = document.getElementById("speakerProfileMessage");
+  message.textContent = "登録中...";
+  try {
+    const body = new FormData(form);
+    const res = await fetch("/api/speaker-profiles", { method: "POST", body });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    form.reset();
+    form.elements.locale.value = "ja-JP";
+    message.textContent = "登録しました";
+    lastSpeakerProfilesSignature = "";
+    renderSpeakerProfiles([data.profile]);
+    pollSpeakerProfiles();
+  } catch (e) {
+    message.textContent = `登録失敗: ${e.message}`;
+  }
+}
+
+async function refreshSpeakerProfile(id) {
+  await fetch(`/api/speaker-profiles/${encodeURIComponent(id)}/refresh`, { method: "POST" });
+  lastSpeakerProfilesSignature = "";
+  pollSpeakerProfiles();
+}
+
+async function enrollSpeakerProfile(event, id) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const body = new FormData(form);
+  const res = await fetch(`/api/speaker-profiles/${encodeURIComponent(id)}/enroll`, {
+    method: "POST",
+    body
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(`追加音声登録に失敗しました: ${data.error || res.status}`);
+    return;
+  }
+  form.reset();
+  lastSpeakerProfilesSignature = "";
+  pollSpeakerProfiles();
+}
+
+async function deleteSpeakerProfile(id) {
+  if (!confirm("この話者profileを削除しますか？Azure側のprofileも削除されます。")) return;
+  await fetch(`/api/speaker-profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+  lastSpeakerProfilesSignature = "";
+  pollSpeakerProfiles();
+}
+
 function statusClass(status) {
   return `status-${String(status || "unknown").replace(/[^a-z0-9_-]/gi, "_").toLowerCase()}`;
 }
@@ -362,7 +471,11 @@ async function resetState() {
 }
 
 // initial + interval
+const speakerProfileForm = document.getElementById("speakerProfileForm");
+if (speakerProfileForm) speakerProfileForm.addEventListener("submit", submitSpeakerProfileForm);
 poll();
 pollJobs();
+pollSpeakerProfiles();
 setInterval(poll, POLL_INTERVAL_MS);
 setInterval(pollJobs, POLL_INTERVAL_MS);
+setInterval(pollSpeakerProfiles, POLL_INTERVAL_MS * 2);
