@@ -295,6 +295,27 @@ body {
 .mic-recorder-player { width: 100%; margin-top: 8px; display: none; }
 .mic-recorder-player.ready { display: block; }
 .mic-recorder-hint { color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: 8px; }
+.enrollment-script {
+  border: 1px solid rgba(77,140,255,0.22);
+  background: rgba(77,140,255,0.08);
+  border-radius: 6px;
+  padding: 10px;
+  margin-top: 8px;
+}
+.enrollment-script-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.enrollment-script p {
+  margin: 8px 0 0;
+  color: var(--text);
+  line-height: 1.7;
+  font-size: 12px;
+}
 .speaker-profile-list { min-height: 220px; max-height: 420px; overflow-y: auto; }
 .speaker-profile-card {
   border: 1px solid var(--line);

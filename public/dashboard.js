@@ -54,7 +54,7 @@ async function pollSpeakerProfiles() {
   } catch (e) {
     console.warn("speaker profiles poll failed", e);
     const list = document.getElementById("speakerProfileList");
-    if (list) list.innerHTML = '<div class="empty-state">話者profile取得に失敗しました</div>';
+    if (list) list.innerHTML = `<div class="empty-state">話者profile取得に失敗しました: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -586,6 +586,17 @@ function writeAscii(view, offset, text) {
   for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
 }
 
+async function copyEnrollmentScript() {
+  const text = document.getElementById("enrollmentScriptText")?.textContent || "";
+  const status = document.getElementById("micRecorderStatus");
+  try {
+    await navigator.clipboard.writeText(text);
+    if (status) status.textContent = "読み上げ文をコピーしました";
+  } catch {
+    if (status) status.textContent = "コピーに失敗しました";
+  }
+}
+
 async function refreshSpeakerProfile(id) {
   await fetch(`/api/speaker-profiles/${encodeURIComponent(id)}/refresh`, { method: "POST" });
   lastSpeakerProfilesSignature = "";
@@ -659,6 +670,7 @@ if (speakerProfileForm) speakerProfileForm.addEventListener("submit", submitSpea
 document.getElementById("micStartButton")?.addEventListener("click", startMicRecording);
 document.getElementById("micStopButton")?.addEventListener("click", stopMicRecording);
 document.getElementById("micClearButton")?.addEventListener("click", () => clearMicRecording());
+document.getElementById("copyEnrollmentScriptButton")?.addEventListener("click", copyEnrollmentScript);
 poll();
 pollJobs();
 pollSpeakerProfiles();
