@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test --test-concurrency=1"
+    "test": "node --test --test-concurrency=1",
+    "verify:env": "node scripts/verify-env.js",
+    "verify:graph": "node scripts/verify-env.js --graph-token",
+    "smoke:local": "node scripts/smoke-local.js"
   },
   "dependencies": {
     "@azure/storage-blob": "^12.31.0",

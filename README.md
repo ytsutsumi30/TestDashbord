@@ -123,6 +123,19 @@ dir
 npm start
 ```
 
+`TestDashboard\.env` が存在する場合は、起動時に自動で読み込まれます。
+Azure/Claude/Graph の設定状態は、起動前に次のコマンドで確認できます。
+
+```powershell
+npm run verify:env
+```
+
+Graph の client credential token まで確認する場合:
+
+```powershell
+npm run verify:graph
+```
+
 **このウィンドウは閉じずに開いたまま** にしてください。以下のように表示されれば成功:
 
 ```
@@ -150,6 +163,20 @@ curl.exe http://localhost:3000/healthz
 ```
 
 `{"ok":true,"ts":"..."}` が返れば成功。返ったら確認用ウィンドウは閉じて構いません。
+
+---
+
+### W8 ローカルE2E smoke
+
+外部課金や Graph 権限に依存しないローカル検証です。
+headcount、録音アップロード、議事録生成、Markdown取得、Android照合APIを mock モードで一括確認します。
+
+```powershell
+cd C:\PRJ2\dev2\TestDashboard
+npm run smoke:local
+```
+
+`W8 local smoke passed.` と表示されれば、ローカル統合経路は正常です。
 
 ---
 

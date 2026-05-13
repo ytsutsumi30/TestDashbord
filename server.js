@@ -9,6 +9,7 @@
 
 const express = require("express");
 const path = require("path");
+require("./services/env-loader").loadEnv();
 
 // W2: Azure Speech 連携サービス
 const jobProcessor    = require("./services/job-processor");
