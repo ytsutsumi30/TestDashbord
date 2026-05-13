@@ -162,6 +162,20 @@ app.post("/ingest/recording", upload.single("audio"), (req, res) => {
     }
 
     const jobId = meta.job_id || `srv-${Date.now()}`;
+    const existingJob = jobProcessor.getJob(jobId);
+    if (existingJob) {
+      cleanupUploadedFile(req.file);
+      return res.status(200).json({
+        ok: true,
+        job_id: jobId,
+        server_job_id: existingJob.jobId,
+        exists: true,
+        duplicate: true,
+        status: existingJob.status,
+        message: "job already exists"
+      });
+    }
+
     const record = {
       job_id:     jobId,
       device_id:  meta.device_id,
@@ -204,6 +218,8 @@ app.post("/ingest/recording", upload.single("audio"), (req, res) => {
     return res.status(202).json({
       ok: true,
       job_id: jobId,
+      server_job_id: jobId,
+      exists: true,
       status: "received",
       message: "transcription started"
     });
@@ -299,20 +315,31 @@ app.delete("/api/speaker-profiles/:id", async (req, res) => {
 app.get("/public-audio/:token/:filename", audioPublisher.localAudioMiddleware);
 
 // ─── W2: ジョブ状態取得 ─────────────────────────────────────────
-app.get("/api/jobs", (_req, res) => {
+app.get("/api/jobs", (req, res) => {
+  const lookupId = req.query.jobId || req.query.job_id || req.query.clientJobId || req.query.client_job_id;
+  if (lookupId) {
+    const job = findJobByAnyId(String(lookupId));
+    if (!job) {
+      return res.json({
+        ok: true,
+        exists: false,
+        query: String(lookupId),
+        job: null
+      });
+    }
+    return res.json({
+      ok: true,
+      exists: true,
+      query: String(lookupId),
+      job: jobSummary(job)
+    });
+  }
+
   const jobs = jobProcessor.listJobs().map(j => ({
-    jobId:        j.jobId,
-    status:       j.status,
-    createdAt:    j.createdAt,
-    title:        j.meta?.title,
-    deviceId:     j.meta?.device_id,
-    roomId:       j.meta?.room_id,
-    speakerCount: j.transcript?.speakerCount,
+    ...jobSummary(j),
     speakerIdentification: j.speakerIdentification || j.transcript?.speakerIdentification,
     speakerInference: j.speakerInference || j.transcript?.speakerInference,
-    transcriptMerger: j.transcriptMerger || j.transcript?.transcriptMerger,
-    error:        j.error,
-    mocked:       j.azureSpeech?.mocked
+    transcriptMerger: j.transcriptMerger || j.transcript?.transcriptMerger
   }));
   res.json({ ok: true, count: jobs.length, jobs });
 });
@@ -377,6 +404,39 @@ app.get("/healthz", (_req, res) => res.json({ ok: true, ts: new Date().toISOStri
 function cleanupUploadedFile(file) {
   if (!file?.path) return;
   fs.promises.unlink(file.path).catch(() => {});
+}
+
+function findJobByAnyId(id) {
+  if (!id) return null;
+  const direct = jobProcessor.getJob(id);
+  if (direct) return direct;
+  return jobProcessor.listJobs().find(job =>
+    job.jobId === id ||
+    job.meta?.job_id === id ||
+    job.meta?.clientJobId === id ||
+    job.meta?.client_job_id === id ||
+    job.meta?.androidJobId === id ||
+    job.meta?.roomJobId === id
+  ) || null;
+}
+
+function jobSummary(j) {
+  return {
+    jobId:        j.jobId,
+    serverJobId:  j.jobId,
+    clientJobId:  j.meta?.job_id || j.meta?.clientJobId || j.meta?.client_job_id || j.jobId,
+    status:       j.status,
+    createdAt:    j.createdAt,
+    completedAt:  j.completedAt,
+    title:        j.meta?.title,
+    deviceId:     j.meta?.device_id,
+    roomId:       j.meta?.room_id,
+    speakerCount: j.transcript?.speakerCount,
+    error:        j.error,
+    mocked:       j.azureSpeech?.mocked,
+    downloadUrl:  j.minutes?.docxPath ? `/api/minutes/${j.jobId}/download` : null,
+    markdownUrl:  j.minutes?.markdown ? `/api/minutes/${j.jobId}/markdown` : null
+  };
 }
 
 function handleApiError(res, err) {

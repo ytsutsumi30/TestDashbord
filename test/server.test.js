@@ -8,6 +8,17 @@ const test = require("node:test");
 
 const repoRoot = path.resolve(__dirname, "..");
 
+function cleanupJob(jobId) {
+  for (const filePath of [
+    path.join(repoRoot, "storage", "jobs", `${jobId}.json`),
+    path.join(repoRoot, "storage", "transcripts", `${jobId}.json`),
+    path.join(repoRoot, "storage", "minutes", `${jobId}.docx`),
+    path.join(repoRoot, "storage", "minutes-md", `${jobId}.md`)
+  ]) {
+    fs.rmSync(filePath, { force: true });
+  }
+}
+
 function getFreePort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -121,6 +132,60 @@ test("server exposes core dashboard APIs", async (t) => {
   assert.equal(jobs.response.status, 200);
   assert.equal(jobs.body.ok, true);
   assert.ok(Array.isArray(jobs.body.jobs));
+
+  const missingJob = await jsonRequest(baseUrl, "/api/jobs?clientJobId=missing-android-job");
+  assert.equal(missingJob.response.status, 200);
+  assert.equal(missingJob.body.ok, true);
+  assert.equal(missingJob.body.exists, false);
+
+  const androidJobId = `android-server-test-${process.pid}-${Date.now()}`;
+  t.after(() => cleanupJob(androidJobId));
+  const recordingForm = new FormData();
+  recordingForm.set("meta", JSON.stringify({
+    job_id: androidJobId,
+    device_id: "AA:11:11:11:11:11",
+    room_id: "large",
+    title: "Android照合APIテスト",
+    started_at: "2026-05-14T09:00:00+09:00",
+    ended_at: "2026-05-14T09:01:00+09:00",
+    language: "ja-JP"
+  }));
+  recordingForm.set("audio", new Blob([Buffer.from("mock-m4a")], { type: "audio/mp4" }), `${androidJobId}.m4a`);
+
+  const uploadResponse = await fetch(`${baseUrl}/ingest/recording`, {
+    method: "POST",
+    body: recordingForm
+  });
+  const uploadBody = await uploadResponse.json();
+  assert.equal(uploadResponse.status, 202);
+  assert.equal(uploadBody.job_id, androidJobId);
+  assert.equal(uploadBody.server_job_id, androidJobId);
+
+  const lookupJob = await jsonRequest(baseUrl, `/api/jobs?clientJobId=${encodeURIComponent(androidJobId)}`);
+  assert.equal(lookupJob.response.status, 200);
+  assert.equal(lookupJob.body.exists, true);
+  assert.equal(lookupJob.body.job.jobId, androidJobId);
+  assert.equal(lookupJob.body.job.clientJobId, androidJobId);
+
+  const duplicateForm = new FormData();
+  duplicateForm.set("meta", JSON.stringify({
+    job_id: androidJobId,
+    device_id: "AA:11:11:11:11:11",
+    room_id: "large",
+    title: "Android照合APIテスト",
+    started_at: "2026-05-14T09:00:00+09:00",
+    ended_at: "2026-05-14T09:01:00+09:00",
+    language: "ja-JP"
+  }));
+  duplicateForm.set("audio", new Blob([Buffer.from("mock-m4a-duplicate")], { type: "audio/mp4" }), `${androidJobId}-retry.m4a`);
+  const duplicateResponse = await fetch(`${baseUrl}/ingest/recording`, {
+    method: "POST",
+    body: duplicateForm
+  });
+  const duplicateBody = await duplicateResponse.json();
+  assert.equal(duplicateResponse.status, 200);
+  assert.equal(duplicateBody.duplicate, true);
+  assert.equal(duplicateBody.server_job_id, androidJobId);
 
   const profiles = await jsonRequest(baseUrl, "/api/speaker-profiles");
   assert.equal(profiles.response.status, 200);
