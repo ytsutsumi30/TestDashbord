@@ -13,6 +13,7 @@ const docxBuilder    = require("./docx-builder");
 const graph          = require("./graph");
 const speakerInference = require("./speaker-inference");
 const speakerIdentification = require("./speaker-identification");
+const transcriptMerger = require("./transcript-merger");
 
 // 永続化先: storage/transcripts/<jobId>.json + storage/minutes/<jobId>.docx + storage/jobs/<jobId>.json
 const TRANSCRIPTS_DIR = path.join(__dirname, "..", "storage", "transcripts");
@@ -34,7 +35,8 @@ function persistJob(job) {
     const p = path.join(JOBS_DIR, `${job.jobId}.json`);
     // audioFile の絶対パスはファイル名だけに変換して保存
     const snapshot = Object.assign({}, job, {
-      audioFile: job.audioFile ? path.basename(job.audioFile) : null
+      audioFile: job.audioFile ? path.basename(job.audioFile) : null,
+      roomTranscript: undefined
     });
     fs.writeFileSync(p, JSON.stringify(snapshot, null, 2), "utf8");
   } catch (e) {
@@ -76,6 +78,8 @@ const STATUS = Object.freeze({
   COMPLETED:     "completed",
   FAILED:        "failed"
 });
+
+const TRANSCRIPT_MERGE_WINDOW_SEC = Number(process.env.TRANSCRIPT_MERGE_WINDOW_SEC || 30 * 60);
 
 function getJob(jobId) { return jobStore.get(jobId); }
 function listJobs() {
@@ -255,7 +259,7 @@ async function processJob(jobId) {
  * @returns {Promise<object>} job state
  */
 async function startJobFromTeams(args) {
-  const { jobId, segments, meta, mocked = false } = args;
+  const { jobId, segments, meta, mocked = false, roomTranscript = null } = args;
   const job = {
     jobId,
     status: STATUS.QUEUED,
@@ -264,6 +268,7 @@ async function startJobFromTeams(args) {
     meta,
     azureSpeech: { mocked: true, skipped: true },
     source: "teams_webhook",
+    roomTranscript,
     error: null,
     transcript: null
   };
@@ -299,6 +304,30 @@ async function processJobFromTeams(jobId, segments, mocked) {
       job.speakerInference = null;
     }
 
+    const roomTranscript = job.roomTranscript || findRelatedRoomTranscript(job);
+    if (roomTranscript?.segments?.length) {
+      const merged = transcriptMerger.mergeTranscripts({
+        primarySegments: segments,
+        secondarySegments: roomTranscript.segments,
+        primaryMeta: job.meta,
+        secondaryMeta: roomTranscript.meta,
+        primarySource: "teams",
+        secondarySource: roomTranscript.source || "room"
+      });
+      segments = merged.segments;
+      job.transcriptMerger = {
+        ...merged.summary,
+        roomJobId: roomTranscript.jobId || null,
+        roomTitle: roomTranscript.meta?.title || null
+      };
+    } else {
+      job.transcriptMerger = {
+        applied: false,
+        source: "transcript_merger",
+        reason: "no_related_room_transcript"
+      };
+    }
+
     job.transcript = {
       speakerCount: new Set(segments.map(s => s.speakerLabel)).size,
       wordCount:    segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0),
@@ -306,7 +335,8 @@ async function processJobFromTeams(jobId, segments, mocked) {
       completedAt: new Date().toISOString(),
       source: "teams_graph_api",
       speakerIdentification: identified.summary,
-      speakerInference: job.speakerInference
+      speakerInference: job.speakerInference,
+      transcriptMerger: job.transcriptMerger
     };
 
     const outPath = path.join(TRANSCRIPTS_DIR, `${jobId}.json`);
@@ -423,6 +453,88 @@ function formatHMS(sec) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function findRelatedRoomTranscript(job) {
+  const explicitId = job.meta?.roomJobId || job.meta?.room_job_id || job.meta?.androidJobId || job.meta?.clientJobId;
+  if (explicitId) {
+    const explicit = loadTranscriptByJobId(explicitId);
+    if (explicit?.segments?.length) return explicit;
+  }
+
+  const candidates = listJobs()
+    .filter(candidate => candidate.jobId !== job.jobId)
+    .filter(candidate => candidate.source !== "teams_webhook")
+    .filter(candidate => candidate.transcript?.segments?.length)
+    .filter(candidate => isRoomMatch(job.meta, candidate.meta))
+    .filter(candidate => isTimeMatch(job.meta, candidate.meta))
+    .map(candidate => ({
+      jobId: candidate.jobId,
+      meta: candidate.meta || {},
+      segments: candidate.transcript.segments,
+      source: "room_recording",
+      score: candidateScore(job.meta, candidate.meta)
+    }))
+    .sort((a, b) => a.score - b.score);
+
+  return candidates[0] || null;
+}
+
+function loadTranscriptByJobId(jobId) {
+  const fromStore = getJob(jobId);
+  if (fromStore?.transcript?.segments?.length) {
+    return {
+      jobId,
+      meta: fromStore.meta || {},
+      segments: fromStore.transcript.segments,
+      source: fromStore.source === "teams_webhook" ? "teams" : "room_recording"
+    };
+  }
+
+  const transcriptPath = path.join(TRANSCRIPTS_DIR, `${jobId}.json`);
+  if (!fs.existsSync(transcriptPath)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(transcriptPath, "utf8"));
+    if (!raw?.transcript?.segments?.length) return null;
+    return {
+      jobId,
+      meta: raw.job?.meta || {},
+      segments: raw.transcript.segments,
+      source: raw.job?.source === "teams_webhook" ? "teams" : "room_recording"
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isRoomMatch(teamsMeta = {}, roomMeta = {}) {
+  const teamsRoom = teamsMeta.room_id || teamsMeta.roomId;
+  const room = roomMeta.room_id || roomMeta.roomId;
+  if (!teamsRoom || !room || teamsRoom === "teams") return false;
+  return teamsRoom === room;
+}
+
+function isTimeMatch(teamsMeta = {}, roomMeta = {}) {
+  const teamsStart = parseTime(teamsMeta.started_at || teamsMeta.startDateTime);
+  const teamsEnd = parseTime(teamsMeta.ended_at || teamsMeta.endDateTime);
+  const roomStart = parseTime(roomMeta.started_at || roomMeta.startDateTime);
+  const roomEnd = parseTime(roomMeta.ended_at || roomMeta.endDateTime);
+
+  if (!teamsStart || !roomStart) return true;
+  if (teamsEnd && roomEnd && teamsStart <= roomEnd && roomStart <= teamsEnd) return true;
+  return Math.abs((teamsStart - roomStart) / 1000) <= TRANSCRIPT_MERGE_WINDOW_SEC;
+}
+
+function candidateScore(teamsMeta = {}, roomMeta = {}) {
+  const teamsStart = parseTime(teamsMeta.started_at || teamsMeta.startDateTime);
+  const roomStart = parseTime(roomMeta.started_at || roomMeta.startDateTime);
+  if (!teamsStart || !roomStart) return Number.MAX_SAFE_INTEGER;
+  return Math.abs(teamsStart - roomStart);
+}
+
+function parseTime(value) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 module.exports = {
   STATUS,
   startJob,
@@ -430,5 +542,6 @@ module.exports = {
   startJobFromTeams,
   getJob,
   listJobs,
-  withTranscriptAppendix
+  withTranscriptAppendix,
+  findRelatedRoomTranscript
 };

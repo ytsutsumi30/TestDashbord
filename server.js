@@ -310,6 +310,7 @@ app.get("/api/jobs", (_req, res) => {
     speakerCount: j.transcript?.speakerCount,
     speakerIdentification: j.speakerIdentification || j.transcript?.speakerIdentification,
     speakerInference: j.speakerInference || j.transcript?.speakerInference,
+    transcriptMerger: j.transcriptMerger || j.transcript?.transcriptMerger,
     error:        j.error,
     mocked:       j.azureSpeech?.mocked
   }));
@@ -330,6 +331,7 @@ app.get("/api/jobs/:jobId", (req, res) => {
     mocked:    j.azureSpeech?.mocked,
     speakerIdentification: j.speakerIdentification || j.transcript?.speakerIdentification,
     speakerInference: j.speakerInference || j.transcript?.speakerInference,
+    transcriptMerger: j.transcriptMerger || j.transcript?.transcriptMerger,
     publishedUrl:    j.publishedUrl,
     publishExpiresAt:j.publishExpiresAt,
     transcript:      j.transcript,

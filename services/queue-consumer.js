@@ -90,7 +90,8 @@ async function _processMessage(msg) {
     language:     body.language || "ja-JP",
     meetingId,
     transcriptId,
-    recordingId:   body.recordingId || body.recording_id || null
+    recordingId:   body.recordingId || body.recording_id || null,
+    roomJobId:     body.roomJobId || body.room_job_id || body.androidJobId || body.clientJobId || null
   };
 
   await jobProcessor.startJobFromTeams({

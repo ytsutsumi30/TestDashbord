@@ -67,3 +67,46 @@ test("startJobFromTeams completes and persists generated artifacts", async (t) =
   assert.ok(fs.existsSync(path.join(repoRoot, "storage", "minutes", `${jobId}.docx`)));
   assert.ok(fs.existsSync(path.join(repoRoot, "storage", "minutes-md", `${jobId}.md`)));
 });
+
+test("startJobFromTeams merges related room transcript before minutes generation", async (t) => {
+  const jobId = `unit-teams-merge-${process.pid}-${Date.now()}`;
+  t.after(() => cleanupJob(jobId));
+
+  await jobProcessor.startJobFromTeams({
+    jobId,
+    mocked: true,
+    meta: {
+      title: "Hybrid Meeting",
+      room_id: "medium",
+      device_id: "teams_webhook",
+      started_at: "2026-05-12T09:00:00.000Z",
+      ended_at: "2026-05-12T09:10:00.000Z",
+      language: "ja-JP"
+    },
+    segments: [
+      { start: 0, end: 4, speakerLabel: "会議室マイク", text: "田中：本日の会議を始めます。" },
+      { start: 8, end: 12, speakerLabel: "会議室マイク", text: "鈴木：進捗は予定通りです。" }
+    ],
+    roomTranscript: {
+      jobId: "android-room-test",
+      source: "room_recording",
+      meta: {
+        room_id: "medium",
+        started_at: "2026-05-12T09:00:00.000Z",
+        ended_at: "2026-05-12T09:10:00.000Z"
+      },
+      segments: [
+        { start: 0.2, end: 4.2, speakerLabel: "田中", text: "本日の会議を始めます。" },
+        { start: 13, end: 17, speakerLabel: "佐藤", text: "ログ確認を追加でお願いします。" }
+      ]
+    }
+  });
+
+  const job = await waitForJob(jobId, jobProcessor.STATUS.COMPLETED);
+
+  assert.equal(job.transcript.transcriptMerger.applied, true);
+  assert.equal(job.transcript.transcriptMerger.mergedCount, 1);
+  assert.equal(job.transcript.transcriptMerger.appendedCount, 1);
+  assert.deepEqual(job.transcript.segments.map(s => s.speakerLabel), ["田中", "鈴木", "佐藤"]);
+  assert.match(job.minutes.markdown, /ログ確認を追加でお願いします/);
+});
