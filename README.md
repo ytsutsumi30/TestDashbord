@@ -136,6 +136,15 @@ Graph の client credential token まで確認する場合:
 npm run verify:graph
 ```
 
+Graph の admin consent / application permission を実アクセスで確認する場合:
+
+```powershell
+npm run verify:graph:permissions
+```
+
+この診断は access token の `roles`、OneDrive への小さなテストファイル書込/削除、任意のTeams transcript読取を確認します。
+Teams transcript実読取まで確認する場合は `.env` に `GRAPH_DIAGNOSTIC_MEETING_ID` と `GRAPH_DIAGNOSTIC_TRANSCRIPT_ID` を設定してください。
+
 **このウィンドウは閉じずに開いたまま** にしてください。以下のように表示されれば成功:
 
 ```
