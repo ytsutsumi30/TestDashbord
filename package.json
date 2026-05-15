@@ -10,6 +10,7 @@
     "verify:env": "node scripts/verify-env.js",
     "verify:graph": "node scripts/verify-env.js --graph-token",
     "verify:graph:permissions": "node scripts/verify-graph-permissions.js",
+    "setup:api-key": "node scripts/setup-api-key.js",
     "smoke:local": "node scripts/smoke-local.js"
   },
   "dependencies": {

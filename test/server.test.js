@@ -75,7 +75,8 @@ test("server exposes core dashboard APIs", async (t) => {
       GRAPH_MOCK: "true",
       QUEUE_CONSUMER_MOCK: "true",
       SPEAKER_RECOGNITION_MOCK: "true",
-      SPEAKER_PROFILES_STORE_PATH: speakerProfilesStorePath
+      SPEAKER_PROFILES_STORE_PATH: speakerProfilesStorePath,
+      TESTDASHBOARD_API_KEY: ""
     },
     stdio: ["ignore", "pipe", "pipe"]
   });

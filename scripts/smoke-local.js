@@ -29,7 +29,8 @@ async function main() {
       PUBLISH_MODE: "local",
       PUBLIC_BASE_URL: baseUrl,
       AZURE_STORAGE_CONNECTION_STRING: "",
-      SPEAKER_PROFILES_STORE_PATH: speakerProfilesStorePath
+      SPEAKER_PROFILES_STORE_PATH: speakerProfilesStorePath,
+      TESTDASHBOARD_API_KEY: ""
     },
     stdio: ["ignore", "pipe", "pipe"]
   });

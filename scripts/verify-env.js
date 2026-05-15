@@ -40,6 +40,7 @@ async function main() {
   console.log(`Graph mock: ${graph.isMock()}`);
   console.log(`Speaker recognition mock: ${speakerRecognition.isMock()}`);
   console.log(`Queue consumer mock: ${queueConsumer.isMock()}`);
+  console.log(`API key auth: ${String(process.env.TESTDASHBOARD_API_KEY || "").trim() ? "enabled" : "disabled"}`);
 
   if (process.argv.includes("--graph-token")) {
     await verifyGraphToken();
