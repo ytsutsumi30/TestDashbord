@@ -231,3 +231,46 @@ test("server exposes core dashboard APIs", async (t) => {
   assert.equal(deleteProfile.response.status, 200);
   assert.equal(deleteProfile.body.ok, true);
 });
+
+test("server requires API key when TESTDASHBOARD_API_KEY is configured", async (t) => {
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, ["server.js"], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      PORT: String(port),
+      TESTDASHBOARD_API_KEY: "test-dashboard-key",
+      AZURE_SPEECH_MOCK: "true",
+      CLAUDE_MOCK: "true",
+      GRAPH_MOCK: "true",
+      QUEUE_CONSUMER_MOCK: "true",
+      SPEAKER_RECOGNITION_MOCK: "true"
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  child.stderr.resume();
+  t.after(() => {
+    if (child.exitCode === null) child.kill("SIGTERM");
+  });
+
+  await waitForHealth(baseUrl, child);
+
+  const health = await jsonRequest(baseUrl, "/healthz");
+  assert.equal(health.response.status, 200);
+
+  const denied = await jsonRequest(baseUrl, "/api/state");
+  assert.equal(denied.response.status, 401);
+  assert.equal(denied.body.error, "api key required");
+
+  const allowed = await jsonRequest(baseUrl, "/api/state", {
+    headers: { "X-API-Key": "test-dashboard-key" }
+  });
+  assert.equal(allowed.response.status, 200);
+  assert.equal(allowed.body.rooms.length, 4);
+
+  const queryAllowed = await jsonRequest(baseUrl, "/api/state?api_key=test-dashboard-key");
+  assert.equal(queryAllowed.response.status, 200);
+  assert.equal(queryAllowed.body.rooms.length, 4);
+});

@@ -20,6 +20,7 @@ const queueConsumer   = require("./services/queue-consumer");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const API_KEY = String(process.env.TESTDASHBOARD_API_KEY || "").trim();
 
 // ─── CORS (GitHub Pages からのfetchを許可) ──────────────────────
 // 必要に応じて Origin を絞り込み可能。'*' にしておけば任意オリジンから可。
@@ -30,6 +31,11 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Max-Age", "86400");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
+});
+
+app.use((req, res, next) => {
+  if (!requiresApiKey(req) || isApiKeyAuthorized(req)) return next();
+  return res.status(401).json({ ok: false, error: "api key required" });
 });
 
 app.use(express.json({ limit: "1mb" }));
@@ -446,6 +452,20 @@ function handleApiError(res, err) {
   return res.status(status).json({ ok: false, error: err.message });
 }
 
+function requiresApiKey(req) {
+  if (!API_KEY || req.method === "OPTIONS") return false;
+  return req.path.startsWith("/api/") ||
+    req.path.startsWith("/ingest/") ||
+    req.path.startsWith("/public-audio/");
+}
+
+function isApiKeyAuthorized(req) {
+  const authHeader = String(req.get("authorization") || "");
+  const bearer = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+  const provided = String(req.get("x-api-key") || bearer || req.query.api_key || "").trim();
+  return provided === API_KEY;
+}
+
 // ─── Graceful shutdown ─────────────────────────────────────────
 process.on("SIGTERM", () => { queueConsumer.stop(); process.exit(0); });
 process.on("SIGINT",  () => { queueConsumer.stop(); process.exit(0); });
@@ -464,6 +484,7 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log("  GET  /public-audio/:token/:filename");
   console.log(`Speech mock: ${process.env.AZURE_SPEECH_MOCK || "(unset)"}`);
   console.log(`Claude mock: ${process.env.CLAUDE_MOCK || "(unset, will mock if no key)"}`);
+  console.log(`API key auth: ${API_KEY ? "enabled" : "disabled"}`);
 
   // 優先度4: functions/ → Queue → TestDashboard 統合
   queueConsumer.start();

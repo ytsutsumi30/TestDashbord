@@ -431,6 +431,12 @@ Teams transcript の話者が会議室マイク等で同一になった場合、
 
 低信頼の発話は `話者未識別` に残します。声紋profileは個人識別情報として扱い、本人同意と社内規程に従って運用してください。
 
+### 公開時の簡易APIキー認証
+
+Cloudflare Tunnel 等で TestDashboard を外部公開する場合は、`.env` に `TESTDASHBOARD_API_KEY` を設定してください。
+設定すると `/api/*`, `/ingest/*`, `/public-audio/*` は `X-API-Key` ヘッダー、`Authorization: Bearer ...`、または `?api_key=...` が一致した場合だけ処理します。
+未設定の場合は従来通り認証なしで動作します。静的HTMLと `/healthz` は認証対象外です。
+
 話者profileの登録音声は、WAVファイルアップロードに加えてブラウザのマイク録音からも登録できます。
 マイク録音はブラウザ上でWAV/PCMへ変換され、既存の `/api/speaker-profiles` に送信されます。
 

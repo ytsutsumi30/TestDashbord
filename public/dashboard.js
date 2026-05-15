@@ -21,9 +21,43 @@ let micRecorderChunks = [];
 let micRecordingStartedAt = 0;
 let micRecordingObjectUrl = null;
 
+const API_KEY_STORAGE_KEY = "testDashboardApiKey";
+initializeApiKey();
+
+function initializeApiKey() {
+  const params = new URLSearchParams(window.location.search);
+  const key = params.get("api_key") || params.get("apiKey");
+  if (key) {
+    localStorage.setItem(API_KEY_STORAGE_KEY, key);
+    params.delete("api_key");
+    params.delete("apiKey");
+    const nextUrl = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash}`;
+    window.history.replaceState({}, "", nextUrl);
+  }
+}
+
+function getApiKey() {
+  return localStorage.getItem(API_KEY_STORAGE_KEY) || "";
+}
+
+function apiFetch(input, init = {}) {
+  const headers = new Headers(init.headers || {});
+  const apiKey = getApiKey();
+  if (apiKey) headers.set("X-API-Key", apiKey);
+  return fetch(input, { ...init, headers });
+}
+
+function withApiKey(url) {
+  const apiKey = getApiKey();
+  if (!apiKey) return url;
+  const u = new URL(url, window.location.origin);
+  u.searchParams.set("api_key", apiKey);
+  return `${u.pathname}${u.search}${u.hash}`;
+}
+
 async function poll() {
   try {
-    const res = await fetch("/api/state", { cache: "no-store" });
+    const res = await apiFetch("/api/state", { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     render(data);
@@ -34,7 +68,7 @@ async function poll() {
 
 async function pollJobs() {
   try {
-    const res = await fetch("/api/jobs", { cache: "no-store" });
+    const res = await apiFetch("/api/jobs", { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     renderJobs(data.jobs || []);
@@ -47,7 +81,7 @@ async function pollJobs() {
 
 async function pollSpeakerProfiles() {
   try {
-    const res = await fetch("/api/speaker-profiles", { cache: "no-store" });
+    const res = await apiFetch("/api/speaker-profiles", { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     renderSpeakerProfiles(data.profiles || []);
@@ -275,7 +309,7 @@ async function loadJobDetail(jobId) {
   const detail = document.getElementById("jobDetail");
   detail.innerHTML = '<div class="empty-state">読み込み中...</div>';
   try {
-    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
+    const res = await apiFetch(`/api/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const job = await res.json();
     detail.innerHTML = jobDetailHtml(job);
@@ -288,7 +322,7 @@ function jobDetailHtml(job) {
   const minutes = job.minutes;
   const onedrive = minutes?.onedrive;
   const download = minutes?.downloadUrl
-    ? `<a class="action-link" href="${escapeAttr(minutes.downloadUrl)}">DOCX ダウンロード</a>`
+    ? `<a class="action-link" href="${escapeAttr(withApiKey(minutes.downloadUrl))}">DOCX ダウンロード</a>`
     : '<span class="muted-text">DOCX未生成</span>';
   const markdown = minutes?.markdownUrl
     ? `<button class="action-link button-link" onclick="loadMarkdownPreview('${escapeAttr(job.jobId)}')">Markdownプレビュー</button>`
@@ -351,7 +385,7 @@ async function loadMarkdownPreview(jobId) {
   const preview = document.getElementById("markdownPreview");
   preview.textContent = "Markdown読み込み中...";
   try {
-    const res = await fetch(`/api/minutes/${encodeURIComponent(jobId)}/markdown`, { cache: "no-store" });
+    const res = await apiFetch(`/api/minutes/${encodeURIComponent(jobId)}/markdown`, { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     preview.textContent = await res.text();
   } catch (e) {
@@ -409,7 +443,7 @@ async function submitSpeakerProfileForm(event) {
   message.textContent = "登録中...";
   try {
     const body = new FormData(form);
-    const res = await fetch("/api/speaker-profiles", { method: "POST", body });
+    const res = await apiFetch("/api/speaker-profiles", { method: "POST", body });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     form.reset();
@@ -598,7 +632,7 @@ async function copyEnrollmentScript() {
 }
 
 async function refreshSpeakerProfile(id) {
-  await fetch(`/api/speaker-profiles/${encodeURIComponent(id)}/refresh`, { method: "POST" });
+  await apiFetch(`/api/speaker-profiles/${encodeURIComponent(id)}/refresh`, { method: "POST" });
   lastSpeakerProfilesSignature = "";
   pollSpeakerProfiles();
 }
@@ -607,7 +641,7 @@ async function enrollSpeakerProfile(event, id) {
   event.preventDefault();
   const form = event.currentTarget;
   const body = new FormData(form);
-  const res = await fetch(`/api/speaker-profiles/${encodeURIComponent(id)}/enroll`, {
+  const res = await apiFetch(`/api/speaker-profiles/${encodeURIComponent(id)}/enroll`, {
     method: "POST",
     body
   });
@@ -623,7 +657,7 @@ async function enrollSpeakerProfile(event, id) {
 
 async function deleteSpeakerProfile(id) {
   if (!confirm("この話者profileを削除しますか？Azure側のprofileも削除されます。")) return;
-  await fetch(`/api/speaker-profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await apiFetch(`/api/speaker-profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
   lastSpeakerProfilesSignature = "";
   pollSpeakerProfiles();
 }
@@ -660,7 +694,7 @@ function escapeAttr(value) {
 
 async function resetState() {
   if (!confirm("すべての会議室の人数をリセットしますか？")) return;
-  await fetch("/api/state", { method: "DELETE" });
+  await apiFetch("/api/state", { method: "DELETE" });
   poll();
 }
 
