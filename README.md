@@ -463,6 +463,18 @@ Teams webhook由来のQueue処理は、`QUEUE_MAX_DEQUEUE_COUNT` 回失敗する
 admin consent未完了やGraph権限不足の間は、`.env` の `QUEUE_CONSUMER_MOCK=true` でポーリングを止めてください。
 DLQメッセージには元メッセージ本文、`dequeueCount`、退避理由、退避時刻を保存します。
 
+### デモE2E固定実行
+
+admin consent を待たずに、デモで見せる中核フローを固定条件で確認できます。
+
+```powershell
+npm run demo:e2e
+```
+
+このコマンドは一時サーバーをAPIキー有効で起動し、話者profile登録、Android録音アップロード、Azure Speech/Claude/Graph/Speaker Recognitionのmock処理、Markdown/DOCX生成、話者名反映を通しで検証します。
+成果物は `storage/demo-e2e/<jobId>/` に `summary.json`, Markdown, DOCX として保存されます。
+Graph admin consent前でも再現できるよう、QueueとGraphはmock固定です。
+
 話者profileの登録音声は、WAVファイルアップロードに加えてブラウザのマイク録音からも登録できます。
 マイク録音はブラウザ上でWAV/PCMへ変換され、既存の `/api/speaker-profiles` に送信されます。
 

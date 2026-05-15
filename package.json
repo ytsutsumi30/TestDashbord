@@ -11,6 +11,7 @@
     "verify:graph": "node scripts/verify-env.js --graph-token",
     "verify:graph:permissions": "node scripts/verify-graph-permissions.js",
     "setup:api-key": "node scripts/setup-api-key.js",
+    "demo:e2e": "node scripts/demo-e2e.js",
     "smoke:local": "node scripts/smoke-local.js"
   },
   "dependencies": {
