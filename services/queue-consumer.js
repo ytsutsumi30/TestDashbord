@@ -8,6 +8,8 @@
 // 環境変数:
 //   AZURE_STORAGE_CONNECTION_STRING  ... Azurite / 本番 Storage 接続文字列
 //   QUEUE_NAME                       ... キュー名 (デフォルト: minutes-jobs)
+//   QUEUE_DLQ_NAME                   ... 失敗退避キュー名 (デフォルト: <QUEUE_NAME>-deadletter)
+//   QUEUE_MAX_DEQUEUE_COUNT          ... 最大試行回数 (デフォルト: 5)
 //   QUEUE_POLL_INTERVAL_MS           ... ポーリング間隔 ms (デフォルト: 10000)
 //   QUEUE_CONSUMER_MOCK              ... "true" でモック動作
 // ============================================================
@@ -18,10 +20,13 @@ const jobProcessor = require("./job-processor");
 
 const CONN_STR      = process.env.AZURE_STORAGE_CONNECTION_STRING || "";
 const QUEUE_NAME    = process.env.QUEUE_NAME || "minutes-jobs";
+const DLQ_NAME      = process.env.QUEUE_DLQ_NAME || `${QUEUE_NAME}-deadletter`;
+const MAX_DEQUEUE   = Math.max(1, parseInt(process.env.QUEUE_MAX_DEQUEUE_COUNT || "5", 10));
 const POLL_MS       = parseInt(process.env.QUEUE_POLL_INTERVAL_MS || "10000", 10);
 const MOCK          = (process.env.QUEUE_CONSUMER_MOCK || "").toLowerCase() === "true";
 
 let _client  = null;
+let _dlqClient = null;
 let _timer   = null;
 let _running = false;
 
@@ -35,6 +40,14 @@ function _getQueueClient() {
     _client = svc.getQueueClient(QUEUE_NAME);
   }
   return _client;
+}
+
+function _getDeadLetterQueueClient() {
+  if (!_dlqClient) {
+    const svc = QueueServiceClient.fromConnectionString(CONN_STR);
+    _dlqClient = svc.getQueueClient(DLQ_NAME);
+  }
+  return _dlqClient;
 }
 
 // ─── メッセージ処理 ──────────────────────────────────────────────
@@ -128,6 +141,8 @@ async function _poll() {
       if (ok) {
         // 処理成功 → キューから削除
         await queue.deleteMessage(msg.messageId, msg.popReceipt);
+      } else if (shouldDeadLetter(msg)) {
+        await deadLetterMessage(queue, msg, "max_dequeue_exceeded");
       } else {
         // 処理失敗 → visibility を即座に戻す (再試行)
         try {
@@ -168,5 +183,45 @@ function stop() {
   }
 }
 
-module.exports = { start, stop, isMock, _processMessage /* テスト用 */ };
+function shouldDeadLetter(msg) {
+  return Number(msg.dequeueCount || 1) >= MAX_DEQUEUE;
+}
+
+async function deadLetterMessage(queue, msg, reason) {
+  const dlq = _getDeadLetterQueueClient();
+  await dlq.createIfNotExists();
+  const payload = buildDeadLetterPayload(msg, reason);
+  await dlq.sendMessage(Buffer.from(JSON.stringify(payload), "utf8").toString("base64"));
+  await queue.deleteMessage(msg.messageId, msg.popReceipt);
+  console.warn(`[queue-consumer] moved message to ${DLQ_NAME}: reason=${reason} dequeueCount=${msg.dequeueCount || 1}`);
+}
+
+function buildDeadLetterPayload(msg, reason) {
+  return {
+    reason,
+    sourceQueue: QUEUE_NAME,
+    messageId: msg.messageId || null,
+    dequeueCount: Number(msg.dequeueCount || 1),
+    deadLetteredAt: new Date().toISOString(),
+    messageText: msg.messageText || ""
+  };
+}
+
+function _setDeadLetterQueueClientForTest(client) {
+  const previous = _dlqClient;
+  _dlqClient = client;
+  return previous;
+}
+
+module.exports = {
+  start,
+  stop,
+  isMock,
+  _processMessage,
+  _poll,
+  shouldDeadLetter,
+  deadLetterMessage,
+  buildDeadLetterPayload,
+  _setDeadLetterQueueClientForTest
+};
 
