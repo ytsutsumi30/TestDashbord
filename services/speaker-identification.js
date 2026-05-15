@@ -90,6 +90,60 @@ async function identifyTeamsTranscriptSpeakers({ jobId, meta, segments }) {
   }
 }
 
+async function identifyRoomTranscriptSpeakers({ jobId, audioFile, segments }) {
+  if (!isEnabled()) {
+    return skipped(segments, "disabled");
+  }
+
+  const profiles = enrolledProfiles();
+  if (profiles.length < 1) {
+    return skipped(segments, "no_enrolled_profiles");
+  }
+  if (!audioFile) {
+    return skipped(segments, "missing_audio_file");
+  }
+
+  try {
+    const identified = await identifyDiarizedSpeakers({
+      jobId,
+      recordingFile: audioFile,
+      diarizedSegments: segments,
+      profiles
+    });
+    const applied = applyIdentifiedLabels({
+      transcriptSegments: segments,
+      diarizedSegments: segments,
+      speakerMap: identified.speakerMap
+    });
+    const summary = buildSummary({
+      downloaded: { recording: null, mocked: false },
+      diarized: {
+        jobUrl: null,
+        speakerCount: new Set((segments || []).map(s => s.speakerId ?? s.speakerLabel).filter(Boolean)).size
+      },
+      identified,
+      profiles,
+      segments: applied,
+      note: "Audio-based speaker identification was applied to the Android/room recording transcript."
+    });
+    if (!summary.applied) {
+      return { segments, summary };
+    }
+    return { segments: applied, summary };
+  } catch (error) {
+    return {
+      segments,
+      summary: {
+        applied: false,
+        source: "audio_speaker_identification",
+        reason: "failed",
+        error: error.message,
+        note: "Room recording speaker identification failed; original diarization labels were preserved."
+      }
+    };
+  }
+}
+
 async function identifyDiarizedSpeakers({ jobId, recordingFile, diarizedSegments, profiles }) {
   const minDurationSec = Number(process.env.SPEAKER_IDENTIFICATION_MIN_SEGMENT_SEC || 4);
   const threshold = Number(process.env.SPEAKER_IDENTIFICATION_MIN_SCORE || 0.65);
@@ -180,7 +234,7 @@ function bestOverlapSegment(target, candidates) {
   return best;
 }
 
-function buildSummary({ downloaded, diarized, identified, profiles, segments }) {
+function buildSummary({ downloaded, diarized, identified, profiles, segments, note = null }) {
   const identifiedCount = segments.filter(segment => segment.speakerIdentification?.status === "identified").length;
   const unknownCount = segments.filter(segment => segment.speakerLabel === UNKNOWN).length;
   return {
@@ -197,7 +251,7 @@ function buildSummary({ downloaded, diarized, identified, profiles, segments }) 
     identifications: identified.identifications,
     identifiedCount,
     unknownCount,
-    note: "Audio-based speaker identification applies only matches above threshold; low-confidence segments remain unidentified."
+    note: note || "Audio-based speaker identification applies only matches above threshold; low-confidence segments remain unidentified."
   };
 }
 
@@ -235,6 +289,7 @@ module.exports = {
   UNKNOWN,
   isEnabled,
   identifyTeamsTranscriptSpeakers,
+  identifyRoomTranscriptSpeakers,
   identifyDiarizedSpeakers,
   applyIdentifiedLabels,
   bestOverlapSegment

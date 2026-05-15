@@ -58,3 +58,33 @@ test("identifyTeamsTranscriptSpeakers applies enrolled profile labels from recor
   assert.ok(result.segments.every(segment => segment.speakerIdentification));
   assert.ok(result.segments.some(segment => segment.speakerLabel === "谷崎"));
 });
+
+test("identifyRoomTranscriptSpeakers applies enrolled profile labels from Android recording audio", async () => {
+  const wavPath = path.join(tempDir, "room-profile.wav");
+  fs.writeFileSync(wavPath, Buffer.from("RIFF room profile wav"));
+  await speakerProfiles.createProfile({
+    displayName: "山田",
+    email: "yamada@example.com",
+    department: "PSU",
+    audioFile: wavPath
+  });
+
+  const audioPath = path.join(tempDir, "android-recording.m4a");
+  fs.writeFileSync(audioPath, Buffer.from("mock android m4a"));
+
+  const result = await speakerIdentification.identifyRoomTranscriptSpeakers({
+    jobId: `speaker-ident-room-${process.pid}-${Date.now()}`,
+    audioFile: audioPath,
+    segments: [
+      { start: 0, end: 5, speakerId: 1, speakerLabel: "Speaker 1", text: "開始します。" },
+      { start: 6, end: 11, speakerId: 2, speakerLabel: "Speaker 2", text: "承知しました。" }
+    ]
+  });
+
+  const enrolledNames = new Set(speakerProfiles.listProfiles().map(profile => profile.displayName));
+  assert.equal(result.summary.applied, true);
+  assert.equal(result.summary.source, "audio_speaker_identification");
+  assert.ok(result.summary.identifiedCount >= 1);
+  assert.ok(result.segments.every(segment => segment.speakerIdentification));
+  assert.ok(result.segments.some(segment => enrolledNames.has(segment.speakerLabel)));
+});

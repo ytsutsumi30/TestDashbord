@@ -143,12 +143,25 @@ async function processJob(jobId) {
       locale:      job.meta?.language || "ja-JP"
     });
 
+    job.status = STATUS.IDENTIFYING;
+    persistJob(job);
+    const identified = await speakerIdentification.identifyRoomTranscriptSpeakers({
+      jobId,
+      audioFile: job.audioFile,
+      segments: result.segments
+    });
+    result.segments = identified.segments;
+    result.speakerCount = new Set(result.segments.map(s => s.speakerLabel || s.speakerId).filter(Boolean)).size;
+    result.wordCount = result.segments.reduce((n, s) => n + String(s.text || "").split(/\s+/).filter(Boolean).length, 0);
+    job.speakerIdentification = identified.summary;
+
     job.transcript = {
       jobUrl:       result.jobUrl,
       speakerCount: result.speakerCount,
       wordCount:    result.wordCount,
       segments:     result.segments,
-      completedAt:  new Date().toISOString()
+      completedAt:  new Date().toISOString(),
+      speakerIdentification: identified.summary
     };
 
     // transcript ファイルを永続化
